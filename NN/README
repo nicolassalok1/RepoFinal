@@ -63,13 +63,17 @@ pip install torch pandas numpy pytest
 
 ## ✅ Tests
 
-Run the minimal regression suite (requires `pytest`):
+Follow this process to launch the regression tests:
 
-```bash
-python -m pytest -q
-```
+1. **Install `pytest`** (only needed once): `pip install pytest`.
+2. **Move into this directory**: `cd RepoFinal/NN`.
+3. **Run the suite**:
+   ```bash
+   python -m pytest -q
+   ```
+4. **Inspect the output**: each test name should show `PASSED`; any failure will report a traceback so you can jump straight to the offending module.
 
-The tests ensure:
+What the tests cover:
 - `φ(0) = 1` for the Heston characteristic function.
 - Black–Scholes pricing and the implied-vol solver invert each other.
 - The NN forward/backward pass yields non-zero gradients (autograd sanity check).
