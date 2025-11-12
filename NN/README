@@ -1,0 +1,83 @@
+# Heston Parameter Neural Network
+
+This directory hosts a clean, modular implementation for estimating Heston model parameters from vanilla option quotes. Every component favors readability, deterministic behaviour, and full `torch.float64` autodiff compatibility so the Carr–Madan FFT pricer sits directly inside the training loop.
+
+---
+
+## 📂 Project Structure
+
+| File | Description |
+| --- | --- |
+| `io_csv.py` | Validated CSV loader for columns `S0, K, C_mkt, T`. |
+| `bs_iv.py` | Black–Scholes call pricer and bisection implied-vol solver. |
+| `dataset.py` | Feature engineering (`[S0/K, T, σ_BS]`) plus tensor packaging & splits. |
+| `heston_torch.py` | Heston parameter dataclass, Little Heston Trap CF, Carr–Madan FFT. |
+| `model.py` | 3→64→64→5 MLP producing unconstrained logits, priced via FFT. |
+| `train.py` | End-to-end trainer with AdamW, validation logging, optional checkpointing. |
+| `tests/test_minimal.py` | Regression checks for φ(0)=1, BS/IV inversion, gradient flow. |
+
+---
+
+## 🔧 Requirements
+
+- Python 3.9+
+- `torch`, `pandas`, `numpy`
+- Optional: `pytest` for the smoke tests
+
+Install dependencies with your preferred toolchain, e.g.
+
+```bash
+pip install torch pandas numpy pytest
+```
+
+---
+
+## 🚀 Training Workflow
+
+1. **Data**  
+   Place a CSV file with headers `S0,K,C_mkt,T` in this folder (e.g. `options_sample_200.csv`).
+
+2. **Run training**
+
+   ```bash
+   python train.py \
+       --csv options_sample_200.csv \
+       --r 0.02 \
+       --epochs 50 \
+       --lr 1e-3 \
+       --alpha 1.5 \
+       --nfft 4096 \
+       --eta 0.25
+   ```
+
+   Per epoch the pipeline:
+   - Computes implied vols via the Black–Scholes solver.
+   - Builds features `[S0/K, T, σ_BS]` and feeds them into the MLP.
+   - Maps outputs to physical Heston params via softplus/tanh transforms.
+   - Prices with Carr–Madan FFT (Little Heston Trap) and reports RMSE plus a 5-row validation table.
+
+3. **Optional checkpoint**  
+   Append `--save-path heston_net.pt` to persist the trained weights.
+
+---
+
+## ✅ Tests
+
+Run the minimal regression suite (requires `pytest`):
+
+```bash
+python -m pytest -q
+```
+
+The tests ensure:
+- `φ(0) = 1` for the Heston characteristic function.
+- Black–Scholes pricing and the implied-vol solver invert each other.
+- The NN forward/backward pass yields non-zero gradients (autograd sanity check).
+
+---
+
+## 📝 Notes
+
+- All calculations use `torch.float64` for stability during FFT-based pricing.
+- Simpson weights and log-strike interpolation keep the Carr–Madan implementation accurate yet easy to read.
+- No external APIs are required; implied vols are computed locally via the bundled solver.
