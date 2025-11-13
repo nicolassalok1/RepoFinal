@@ -1,0 +1,91 @@
+\documentclass[a4paper,11pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{geometry}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\geometry{margin=2.5cm}
+
+\title{Documentation du pipeline \texttt{NN}}
+\author{Répertoire \texttt{RepoFinal/NN}}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section{Objectif général}
+Ce dossier implémente une chaîne complète pour apprendre des paramètres du modèle de Heston directement à partir de cotations d'options vanille. Toutes les briques reposent sur \texttt{PyTorch} en \texttt{float64} pour embarquer un pricer Carr--Madan FFT dans la boucle d'entraînement. Les fichiers décrits ci-dessous suivent l'ordre logique de la donnée marché jusqu'aux tests de non-régression.
+
+\section{Architecture globale}
+\begin{enumerate}[label=\textbf{Étape \arabic*:}]
+  \item \textbf{Chargement} (\texttt{io\_csv.py})~: lecture du CSV marché et validation des colonnes minimales \((S_0, K, C_{\text{mkt}}, T)\).
+  \item \textbf{Étiquetage Black--Scholes} (\texttt{bs\_iv.py})~: calcul du prix call analytique et inversion robuste pour récupérer la volatilité implicite de chaque ligne.
+  \item \textbf{Features \& split} (\texttt{dataset.py})~: assemblage des tenseurs \([S_0/K, T, \sigma_{\text{BS}}]\), cibles \(C_{\text{mkt}}\) et découpage déterministe train/validation.
+  \item \textbf{Paramétrisation Heston} (\texttt{heston\_torch.py})~: projection des sorties réseau vers \((\kappa,\theta,\sigma,\rho,v_0)\) physiquement valides, calcul de la fonction caractéristique et du pricer Carr--Madan.
+  \item \textbf{Modèle neuronal} (\texttt{model.py})~: MLP \(3\rightarrow64\rightarrow64\rightarrow5\), mapping vers les paramètres Heston, pricing FFT par échantillon et perte \(\text{RMSE}\).
+  \item \textbf{Entraînement} (\texttt{train.py})~: boucle AdamW, monitoring des pertes, tableau de validation et sauvegarde optionnelle des poids.
+  \item \textbf{Tests} (\texttt{tests/test\_minimal.py})~: garde-fous unitaires (normalisation \(\phi(0)=1\), inversion BS/IV, flux autograd).
+\end{enumerate}
+
+\section{Détails par fichier}
+\subsection{\texttt{bs\_iv.py}}
+\begin{itemize}[leftmargin=1.5em]
+  \item \texttt{bs\_call\_torch}: implémente la formule fermée du call Black--Scholes avec contrôles numériques (\(\sqrt{T}\) borné, \(\log(S/K)\) clampé, volatilité minimale).
+  \item \texttt{iv\_call\_brent\_torch}: inversion de prix via bissection sécurisée~; initialise une borne supérieure \( \sigma_{\text{high}} \) élargie dynamiquement jusqu'à \(5\) si besoin.
+  \item Utilitaires privés \texttt{\_to\_tensor} et \texttt{\_norm\_cdf} uniformisent les entrées en \texttt{torch.float64} et réutilisent une loi normale standard pré-instanciée.
+\end{itemize}
+
+\subsection{\texttt{dataset.py}}
+\begin{itemize}[leftmargin=1.5em]
+  \item \texttt{make\_dataset\_from\_csv}: convertit un \texttt{DataFrame} pandas en dictionnaire de tenseurs et ajoute la volatilité implicite comme feature guidant l'apprentissage.
+  \item \texttt{split\_train\_val}: mélange déterministe via \texttt{torch.randperm} et fraction de validation bornée pour éviter les splits dégénérés.
+\end{itemize}
+
+\subsection{\texttt{io\_csv.py}}
+\begin{itemize}[leftmargin=1.5em]
+  \item \texttt{read\_market\_csv}: lit le fichier marché et lève une erreur descriptive si des en-têtes obligatoires manquent.
+\end{itemize}
+
+\subsection{\texttt{heston\_torch.py}}
+\begin{itemize}[leftmargin=1.5em]
+  \item \texttt{HestonParams}: dataclass qui applique \texttt{softplus} (paramètres positifs) et sigmoïde bornée (corrélation \(\rho \in (-1,1)\)).
+  \item \texttt{heston\_cf}: implémente la version ``Little Heston Trap'' de la fonction caractéristique, avec correctifs numériques (\(\varepsilon\) complexes, forçage \(\phi(0)=1\)).
+  \item \texttt{carr\_madan\_call\_torch}: calcule les prix via FFT (poids de Simpson, amortissement \(\alpha\), interpolation linéaire sur le log-strike).
+\end{itemize}
+
+\subsection{\texttt{model.py}}
+\begin{itemize}[leftmargin=1.5em]
+  \item \texttt{HestonParamNet}: MLP compact dont la sortie est mappée vers \texttt{HestonParams}.
+  \item \texttt{price\_with\_params}: reconstruit des lots cohérents (\(S_0,K,T,r\)), applique Carr--Madan par échantillon et remet la sortie à la forme d'origine.
+  \item \texttt{rmse\_loss}: métrique unique d'entraînement et de validation.
+\end{itemize}
+
+\subsection{\texttt{train.py}}
+\begin{itemize}[leftmargin=1.5em]
+  \item Parsing des hyperparamètres (chemin CSV, taux, \(\alpha, N_{\text{FFT}}, \eta\), fraction de validation, seed, sauvegarde).
+  \item Boucle d'entraînement AdamW avec journaux \texttt{RMSE} et tableau comparant prix marché/prédits, erreurs absolues et relatives.
+  \item Sauvegarde optionnelle des poids via \texttt{torch.save}.
+\end{itemize}
+
+\subsection{\texttt{tests/test\_minimal.py}}
+\begin{itemize}[leftmargin=1.5em]
+  \item Vérifie la normalisation de la fonction caractéristique en zéro.
+  \item Teste la bijection prix \(\leftrightarrow\) volatilité via Black--Scholes.
+  \item Lance une itération avant/arrière du réseau pour confirmer la présence de gradients non nuls.
+\end{itemize}
+
+\section{Flux d'entraînement}
+Le script \texttt{train.py} orchestre les modules~:
+\begin{enumerate}[label=\arabic*., leftmargin=1.5em]
+  \item Lecture du CSV (\texttt{read\_market\_csv}) puis conversion en tenseurs (\texttt{make\_dataset\_from\_csv}).
+  \item Split cohérent en sous-ensembles train/val.
+  \item Passage des features dans \texttt{HestonParamNet} pour obtenir des paramètres valides.
+  \item Pricing rapide via \texttt{price\_with\_params} qui délègue à \texttt{carr\_madan\_call\_torch}.
+  \item Calcul des \texttt{RMSE}, rétropropagation sur la partie entraînement et suivi métrique sur validation.
+  \item (Optionnel) sauvegarde du modèle entraîné.
+\end{enumerate}
+
+\section{Remarque sur le format}
+LaTeX offre un rendu soigné pour des documents longs ou exportables en PDF. Pour des notes rapides ou collaboratives, un équivalent en Markdown (voir déjà le fichier \texttt{README}) reste plus léger à maintenir. Les deux formats peuvent coexister selon que l'on vise une diffusion interne (Markdown) ou un livrable formel (LaTeX/PDF).
+
+\end{document}
