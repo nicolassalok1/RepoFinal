@@ -113,6 +113,12 @@ def main() -> None:
     data = pd.DataFrame(records)
     data = data[(data["K"] > 0) & (data["T"] > 0)]
     data = data.dropna(subset=["S0", "K", "C_mkt", "T", "type", "iv"])
+
+    # Retain strikes within ±150 of the contemporaneous spot to focus on relevant moneyness range.
+    strike_lower = data["S0"] - 150.0
+    strike_upper = data["S0"] + 150.0
+    data = data[(data["K"] >= strike_lower) & (data["K"] <= strike_upper)]
+
     data = data.sort_values(by=["T", "K"]).reset_index(drop=True)
 
     if data.empty:
