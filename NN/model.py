@@ -14,6 +14,7 @@ class HestonParamNet(nn.Module):
 
     def __init__(self) -> None:
         super().__init__()
+        # Architecture compacte à 3 couches pleinement connectées.
         self.layers = nn.Sequential(
             nn.Linear(3, 64),
             nn.ReLU(),
@@ -23,12 +24,14 @@ class HestonParamNet(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> HestonParams:
+        # Découpe la sortie du réseau en 5 composantes avant projection vers l'espace Heston.
         outputs = self.layers(x)
         components: Tuple[torch.Tensor, ...] = outputs.unbind(-1)
         return HestonParams.from_unconstrained(*components)
 
 
 def _reshape_input(value) -> Tuple[torch.Tensor, Tuple[int, ...]]:
+    # Met à plat tout tenseur/scalaire pour itérer échantillon par échantillon.
     tensor = torch.as_tensor(value, dtype=torch.float64)
     original_shape = tensor.shape
     flat = tensor.reshape(-1)
@@ -36,6 +39,7 @@ def _reshape_input(value) -> Tuple[torch.Tensor, Tuple[int, ...]]:
 
 
 def _expand_param(component: torch.Tensor, batch_size: int) -> torch.Tensor:
+    # Adapte chaque paramètre (scalaire ou batch) à la taille d'entrée courante.
     comp = component.to(dtype=torch.float64)
     if comp.ndim == 0:
         return comp.repeat(batch_size)
@@ -54,6 +58,7 @@ def price_with_params(
     eta: float = 0.25,
 ) -> torch.Tensor:
     """Compute option prices for each sample given predicted parameters."""
+    # Aplatissement synchronisé des entrées pour vérifier la cohérence des shapes.
     S0_flat, original_shape = _reshape_input(S0)
     K_flat, _ = _reshape_input(K)
     T_flat, _ = _reshape_input(T)
@@ -69,6 +74,7 @@ def price_with_params(
     rho = _expand_param(params.rho, batch)
     v0 = _expand_param(params.v0, batch)
 
+    # Boucle sur chaque échantillon pour appeler Carr-Madan avec son jeu de paramètres.
     prices = []
     for idx in range(batch):
         single_params = HestonParams(
@@ -99,5 +105,5 @@ def price_with_params(
 
 def rmse_loss(predicted: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
     """Root-mean-square error loss."""
+    # Utilisé comme métrique/critère unique dans l'entraînement et la validation.
     return torch.sqrt(torch.mean((predicted - target) ** 2))
-

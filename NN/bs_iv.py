@@ -5,30 +5,40 @@ import torch
 from torch.distributions import Normal
 
 
+# Type numérique unique pour éviter les conversions implicites lors des calculs vectorisés.
 _DTYPE = torch.float64
+# Loi normale standard pré-instanciée pour réutiliser sa CDF sans recréer l'objet.
 _NORMAL = Normal(loc=torch.tensor(0.0, dtype=_DTYPE), scale=torch.tensor(1.0, dtype=_DTYPE))
 
 
 def _to_tensor(value) -> torch.Tensor:
+    # Homogénéise toutes les entrées (scalaires, listes, tenseurs) en torch.float64.
     return torch.as_tensor(value, dtype=_DTYPE)
 
 
 def _norm_cdf(x: torch.Tensor) -> torch.Tensor:
+    # Centralise l'appel à Φ(x) et encapsule la loi normale.
     return _NORMAL.cdf(x)
 
 
 def bs_call_torch(S0, K, T, r, q, vol) -> torch.Tensor:
     """Standard Black-Scholes call price evaluated in torch.float64."""
+    # Conversion uniforme pour autoriser aussi bien scalaires que tenseurs.
     S0_t = _to_tensor(S0)
     K_t = _to_tensor(K)
     T_t = _to_tensor(T)
     r_t = _to_tensor(r)
     q_t = _to_tensor(q)
+    # Borne inférieure sur la volatilité pour éviter division par zéro.
     vol_t = torch.clamp(_to_tensor(vol), min=1e-12)
 
+    # Stabilise la racine carrée du temps résiduel pour les maturités quasi nulles.
     sqrt_T = torch.sqrt(torch.clamp(T_t, min=1e-12))
     sigma_sqrt_T = vol_t * sqrt_T
+    # Clamp de log(S/K) pour se prémunir des spots/strikes identiques.
+    # Ceci protège aussi contre les divisions par zéro lorsque S0 == K.
     log_term = torch.log(torch.clamp(S0_t / K_t, min=1e-16))
+    # Terme de dérive combinant taux domestique, dividendes et variance.
     drift = (r_t - q_t + 0.5 * vol_t**2) * T_t
     d1 = torch.where(
         sigma_sqrt_T > 0,
@@ -36,6 +46,7 @@ def bs_call_torch(S0, K, T, r, q, vol) -> torch.Tensor:
         torch.zeros_like(sigma_sqrt_T),
     )
     d2 = d1 - sigma_sqrt_T
+    # Facteurs d'actualisation pour les flux domestiques (strike) et étrangers (spot).
     discount_domestic = torch.exp(-r_t * T_t)
     discount_foreign = torch.exp(-q_t * T_t)
     call = S0_t * discount_foreign * _norm_cdf(d1) - K_t * discount_domestic * _norm_cdf(d2)
@@ -53,6 +64,7 @@ def iv_call_brent_torch(
     max_iter: int = 100,
 ) -> torch.Tensor:
     """Invert Black-Scholes call price to implied volatility via safeguarded bisection."""
+    # Mise au format tenseur de toutes les entrées utilisateur.
     price = _to_tensor(C)
     S0_t = _to_tensor(S0)
     K_t = _to_tensor(K)
@@ -60,10 +72,12 @@ def iv_call_brent_torch(
     r_t = _to_tensor(r)
     q_t = _to_tensor(q)
 
+    # Vérifie la cohérence du prix marché par rapport à la valeur intrinsèque.
     intrinsic = torch.clamp(S0_t * torch.exp(-q_t * T_t) - K_t * torch.exp(-r_t * T_t), min=0.0)
     if price < intrinsic - 1e-12:
         raise ValueError("Market price is below intrinsic value; cannot compute implied volatility.")
 
+    # Intervalle initial [vol_low, vol_high]; la borne haute sera élargie si besoin.
     vol_low = torch.tensor(1e-6, dtype=_DTYPE)
     vol_high = torch.tensor(0.5, dtype=_DTYPE)
     price_high = bs_call_torch(S0_t, K_t, T_t, r_t, q_t, vol_high)
@@ -74,6 +88,7 @@ def iv_call_brent_torch(
     if price_high < price:
         raise ValueError("Failed to bracket implied volatility up to 5.0.")
 
+    # Schéma de bissection sécurisé: on resserre les bornes jusqu'à atteindre la tolérance.
     for _ in range(max_iter):
         vol_mid = 0.5 * (vol_low + vol_high)
         price_mid = bs_call_torch(S0_t, K_t, T_t, r_t, q_t, vol_mid)
@@ -86,4 +101,3 @@ def iv_call_brent_torch(
             vol_low = vol_mid
 
     return vol_mid
-

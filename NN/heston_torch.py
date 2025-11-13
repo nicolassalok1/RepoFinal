@@ -7,15 +7,19 @@ from typing import Tuple
 import torch
 import torch.nn.functional as F
 
+# Sépare les types réels/complexes pour éviter les conversions implicites coûteuses.
 _REAL_DTYPE = torch.float64
 _COMPLEX_DTYPE = torch.complex128
 
 
 def _as_real(value) -> torch.Tensor:
+    # Uniformise les scalaires/listes en tenseurs float64.
     return torch.as_tensor(value, dtype=_REAL_DTYPE)
 
 
 def _as_complex(value) -> torch.Tensor:
+    # Force les paramètres FFT/CF dans l'espace complexe requis par Heston.
+    # On évite ainsi les promotions automatiques différentes selon le backend.
     return torch.as_tensor(value, dtype=_COMPLEX_DTYPE)
 
 
@@ -40,8 +44,10 @@ class HestonParams:
         offset = torch.tensor(eps, dtype=_REAL_DTYPE, device=a_t.device)
 
         def positive(x: torch.Tensor) -> torch.Tensor:
+            # Softplus garantit la positivité; l'offset éloigne des frontières.
             return F.softplus(x) + offset
 
+        # Rho vit dans (-1, 1); on applique un sigmoïde rescalé pour rester borné.
         rho = -0.999 + 1.998 * torch.sigmoid(d_t)
         return HestonParams(
             kappa=positive(a_t),
@@ -54,6 +60,7 @@ class HestonParams:
 
 def heston_cf(u, T, S0, r, q, params: HestonParams) -> torch.Tensor:
     """Little Heston trap characteristic function."""
+    # Mise au même format numérique pour tous les arguments (réels ou complexes).
     u_c = _as_complex(u)
     T_t = _as_real(T)
     S0_t = _as_real(S0)
@@ -70,6 +77,7 @@ def heston_cf(u, T, S0, r, q, params: HestonParams) -> torch.Tensor:
     sigma_sq = sigma ** 2
     d = torch.sqrt((rho * sigma * i * u_c - kappa) ** 2 + sigma_sq * (i * u_c + u_c ** 2))
     denom = kappa - rho * sigma * i * u_c + d
+    # Petits epsilons complexes évitent divisions/logs instables quand denom -> 0.
     eps_c = torch.tensor(1e-12, dtype=_COMPLEX_DTYPE)
     g = (kappa - rho * sigma * i * u_c - d) / (denom + eps_c)
 
@@ -83,6 +91,7 @@ def heston_cf(u, T, S0, r, q, params: HestonParams) -> torch.Tensor:
     drift = torch.log(S0_t) + (r_t - q_t) * T_t
     phi = torch.exp(i * u_c * drift + C + v0 * D)
 
+    # La CF doit valoir 1 pour u=0 ; correction directe pour compenser les arrondis.
     zero_mask = torch.abs(u_c) < 1e-12
     if torch.any(zero_mask):
         phi = torch.where(zero_mask, torch.ones_like(phi, dtype=_COMPLEX_DTYPE), phi)
@@ -90,6 +99,7 @@ def heston_cf(u, T, S0, r, q, params: HestonParams) -> torch.Tensor:
 
 
 def _simpson_weights(n: int, dtype=torch.float64) -> torch.Tensor:
+    # Poids de Simpson utilisés par la carrée FFT pour intégrer les fréquences.
     weights = torch.ones(n, dtype=dtype)
     if n > 1:
         weights[1:n - 1:2] = 4.0
@@ -100,6 +110,7 @@ def _simpson_weights(n: int, dtype=torch.float64) -> torch.Tensor:
 
 
 def _linear_interpolate(xp: torch.Tensor, fp: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+    # Interpolation linéaire maison (torch ne fournit pas d'équivalent 1D natif).
     x_clamped = torch.clamp(x, xp[0], xp[-1])
     indices = torch.searchsorted(xp, x_clamped)
     indices = torch.clamp(indices, min=1, max=xp.numel() - 1)
@@ -124,6 +135,7 @@ def carr_madan_call_torch(
     eta: float = 0.25,
 ) -> torch.Tensor:
     """Carr-Madan FFT-based Heston call price computation with interpolation over strikes."""
+    # Tous les scalaires sont aplanis pour vectoriser la FFT dans torch.
     S0_t = _as_real(S0)
     r_t = _as_real(r)
     q_t = _as_real(q)
@@ -147,12 +159,14 @@ def carr_madan_call_torch(
 
     numerator = torch.exp(-r_t * T_t) * phi
     denominator = (alpha_t ** 2 + alpha_t - u ** 2) + i * u * (2.0 * alpha_t + 1.0)
+    # Dénominateur régularisé pour éviter les fréquences où la formule diverge.
     psi = numerator / (denominator + torch.tensor(1e-12, dtype=_COMPLEX_DTYPE))
 
     weights = _simpson_weights(N, dtype=_REAL_DTYPE)
     exp_term = torch.exp(i * b * u)
     fft_input = psi * exp_term * weights * eta_t
     fft_vals = torch.fft.fft(fft_input)
+    # On retire l'exponentielle de damping pour retrouver le prix du call brut.
     calls = torch.exp(-alpha_t * k) / torch.pi * fft_vals.real
 
     K_grid = torch.exp(k)

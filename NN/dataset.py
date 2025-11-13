@@ -5,11 +5,13 @@ from typing import Dict, Tuple
 
 import torch
 
+# Utilise l'inversion Black-Scholes pour étiqueter les données avec les volatilités implicites.
 from bs_iv import iv_call_brent_torch
 
 
 def make_dataset_from_csv(df, r: float, q: float = 0.0) -> Dict[str, torch.Tensor]:
     """Convert a pandas DataFrame into tensors with implied vol features."""
+    # Conversion immédiate en tenseurs double précision pour éviter les casts répétitifs.
     S0 = torch.tensor(df["S0"].values, dtype=torch.float64)
     K = torch.tensor(df["K"].values, dtype=torch.float64)
     T = torch.tensor(df["T"].values, dtype=torch.float64)
@@ -19,8 +21,10 @@ def make_dataset_from_csv(df, r: float, q: float = 0.0) -> Dict[str, torch.Tenso
     for price, s0_val, k_val, t_val in zip(C, S0, K, T):
         sigma = iv_call_brent_torch(price, s0_val, k_val, t_val, r, q)
         sigmas.append(sigma)
+    # Les sigmas implicites servent de feature supplémentaire pour guider le réseau.
     sigma_tensor = torch.stack(sigmas)
 
+    # Les features agrégées capturent moneyness, maturité et volatilité implicite.
     X = torch.stack(
         [
             torch.clamp(S0 / K, min=1e-6),
@@ -41,10 +45,12 @@ def split_train_val(
     seed: int = 123,
 ) -> Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]:
     """Deterministically split dataset into train/validation parts."""
+    # Contrôles préliminaires pour éviter les splits dégénérés.
     total = data["X"].shape[0]
     if total < 2:
         raise ValueError("Need at least two samples to perform a train/validation split.")
 
+    # Mélange déterministe via générateur pour des expérimentations reproductibles.
     generator = torch.Generator().manual_seed(seed)
     permutation = torch.randperm(total, generator=generator)
     n_val = max(1, int(round(total * val_frac)))
@@ -55,7 +61,7 @@ def split_train_val(
     train_idx = permutation[n_val:]
 
     def _gather(idx: torch.Tensor) -> Dict[str, torch.Tensor]:
+        # Sélectionne de manière cohérente toutes les colonnes pour l'ensemble ciblé.
         return {key: value[idx] for key, value in data.items()}
 
     return _gather(train_idx), _gather(val_idx)
-

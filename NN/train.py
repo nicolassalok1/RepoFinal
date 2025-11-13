@@ -13,6 +13,7 @@ from model import HestonParamNet, price_with_params, rmse_loss
 
 
 def parse_args() -> argparse.Namespace:
+    # Paramétrage minimal pour reproduire les expériences (CSV, taux, hyperparams).
     parser = argparse.ArgumentParser(description="Train NN to predict Heston parameters.")
     parser.add_argument("--csv", type=str, required=True, help="Path to option market CSV file.")
     parser.add_argument("--r", type=float, required=True, help="Constant risk-free rate.")
@@ -28,6 +29,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def _print_validation_table(val_data: Dict[str, torch.Tensor], preds: torch.Tensor) -> None:
+    # Petit aperçu chiffré pour suivre la qualité des prix en validation.
     n_rows = min(5, val_data["y"].shape[0])
     header = f"{'S0':>8} {'K':>8} {'T':>6} {'C_mkt':>12} {'C_pred':>12} {'abs_err':>10} {'rel_err%':>10}"
     print(header)
@@ -47,17 +49,21 @@ def _print_validation_table(val_data: Dict[str, torch.Tensor], preds: torch.Tens
 
 def main() -> None:
     args = parse_args()
+    # On impose float64 pour aligner toutes les sous-routines torch.
     torch.set_default_dtype(torch.float64)
     torch.manual_seed(args.seed)
 
+    # Lecture + préparation dataset avant split train/val déterministe.
     df = read_market_csv(args.csv)
     data = make_dataset_from_csv(df, r=args.r)
     train_data, val_data = split_train_val(data, val_frac=args.val_frac, seed=args.seed)
 
     model = HestonParamNet()
+    # AdamW offre une régularisation implicite acceptable sur ce problème.
     optimizer = AdamW(model.parameters(), lr=args.lr)
 
     for epoch in range(1, args.epochs + 1):
+        # --- Entraînement ---
         model.train()
         optimizer.zero_grad()
         train_params = model(train_data["X"])
@@ -75,6 +81,7 @@ def main() -> None:
         train_loss.backward()
         optimizer.step()
 
+        # --- Validation sans gradient ---
         model.eval()
         with torch.no_grad():
             val_params = model(val_data["X"])
@@ -94,10 +101,10 @@ def main() -> None:
         _print_validation_table(val_data, val_prices)
 
     if args.save:
+        # Sauvegarde facultative des poids pour réutilisation ultérieure.
         torch.save(model.state_dict(), args.save)
         print(f"Model weights saved to {args.save}")
 
 
 if __name__ == "__main__":
     main()
-

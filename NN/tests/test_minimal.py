@@ -12,6 +12,7 @@ torch.set_default_dtype(torch.float64)
 
 
 def test_heston_cf_zero_equals_one() -> None:
+    # La CF doit respecter φ(0)=1 quelle que soit la configuration.
     params = HestonParams.from_unconstrained(
         torch.tensor(0.2),
         torch.tensor(0.1),
@@ -24,6 +25,7 @@ def test_heston_cf_zero_equals_one() -> None:
 
 
 def test_bs_iv_inversion_accuracy() -> None:
+    # Vérifie que l'inversion Black-Scholes récupère la volatilité injectée.
     S0, K, T, r, q = 100.0, 110.0, 0.5, 0.01, 0.0
     vol_true = torch.tensor(0.25)
     price = bs_call_torch(S0, K, T, r, q, vol_true)
@@ -32,6 +34,7 @@ def test_bs_iv_inversion_accuracy() -> None:
 
 
 def test_nn_forward_backward_smoke() -> None:
+    # Test fumée: propagation avant/arrière pour s'assurer de gradients non nuls.
     net = HestonParamNet()
     batch = 3
     X = torch.randn(batch, 3, dtype=torch.float64)
@@ -47,4 +50,3 @@ def test_nn_forward_backward_smoke() -> None:
 
     grad_norm = sum(p.grad.norm().item() for p in net.parameters() if p.grad is not None)
     assert grad_norm > 0.0
-
