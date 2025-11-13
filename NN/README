@@ -35,13 +35,13 @@ pip install torch pandas numpy pytest
 ## 🚀 Training Workflow
 
 1. **Data**  
-   Place a CSV file with headers `S0,K,C_mkt,T` in this folder (e.g. `options_sample_200.csv`).
+   Place a CSV file with headers `S0,K,C_mkt,T` in this folder (e.g. `options_SPY.csv` generated via `download_options.py TICKER`).
 
 2. **Run training**
 
    ```bash
    python train.py \
-       --csv options_sample_200.csv \
+       --csv options_SPY.csv \
        --r 0.02 \
        --epochs 50 \
        --lr 1e-3 \
