@@ -125,10 +125,21 @@ def main() -> None:
         print("Error: no clean option rows remain after filtering.")
         sys.exit(1)
 
-    output_path = Path(__file__).with_name(f"options_{ticker}.csv")
-    data.to_csv(output_path, index=False)
+    base_path = Path(__file__).with_name(f"options_{ticker}.csv")
+    data.to_csv(base_path, index=False)
     print(f"Total options collected: {len(data)}")
-    print(f"Saved file: {output_path.name}")
+    print(f"Saved file: {base_path.name}")
+
+    calls = data[data["type"] == "C"]
+    puts = data[data["type"] == "P"]
+    if not calls.empty:
+        call_path = Path(__file__).with_name(f"options_{ticker}_calls.csv")
+        calls.to_csv(call_path, index=False)
+        print(f"Saved call subset: {call_path.name} ({len(calls)} rows)")
+    if not puts.empty:
+        put_path = Path(__file__).with_name(f"options_{ticker}_puts.csv")
+        puts.to_csv(put_path, index=False)
+        print(f"Saved put subset: {put_path.name} ({len(puts)} rows)")
 
 
 if __name__ == "__main__":
