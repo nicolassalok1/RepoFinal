@@ -120,6 +120,11 @@ def main() -> None:
     data = data[(data["K"] >= strike_lower) & (data["K"] <= strike_upper)]
 
     data = data.sort_values(by=["T", "K"]).reset_index(drop=True)
+    data['T'] = data['T'].round(2)
+    data['iv'] = data['iv'].round(2)
+    data['S0'] = data['S0'].round(2)
+    data["T"] = data["T"].round(2)
+    data["iv"] = data["iv"].round(2)
 
     if data.empty:
         print("Error: no clean option rows remain after filtering.")
