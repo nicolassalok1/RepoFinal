@@ -146,6 +146,7 @@ def main() -> None:
         if not raw_calls.empty:
             heston_call_path = Path(__file__).with_name("Heston_call.csv")
             raw_calls_to_save = raw_calls.drop(columns=["type"], errors="ignore")
+            raw_calls_to_save = raw_calls_to_save.round(4)
             raw_calls_to_save.to_csv(heston_call_path, index=False)
             print(f"Saved Heston training call snapshot: {heston_call_path.name}")
     if not puts.empty:
@@ -155,6 +156,7 @@ def main() -> None:
         if not raw_puts.empty:
             heston_put_path = Path(__file__).with_name("Heston_put.csv")
             raw_puts_to_save = raw_puts.drop(columns=["type"], errors="ignore")
+            raw_puts_to_save = raw_puts_to_save.round(4)
             raw_puts_to_save.to_csv(heston_put_path, index=False)
             print(f"Saved Heston training put snapshot: {heston_put_path.name}")
 
