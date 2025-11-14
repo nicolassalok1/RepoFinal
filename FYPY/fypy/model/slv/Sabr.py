@@ -13,13 +13,19 @@ class Sabr(Calibratable):
                  v_0: float = 0.04,
                  alpha: float = 0.5,
                  beta: float = 0.9,
-                 rho: float = -0.6
+                 rho: float = -0.6,
+                 nu: Optional[float] = None
                  ):
         """
         SABR stochastic local volatility model class
         :param discountCurve: Discount curve term structure
         :param forwardCurve: Forward curve term structure
+        :param v_0: float, alias for nu (vol of vol). For backwards compatibility you can also pass nu keyword.
+        :param nu: Optional[float], alternative keyword for v_0 to match common SABR notation
         """
+
+        if nu is not None:
+            v_0 = nu
 
         self._params = np.asarray([v_0, alpha, beta, rho])
 
@@ -29,6 +35,11 @@ class Sabr(Calibratable):
     @property
     def v_0(self) -> float:
         return self._params[0]
+
+    @property
+    def nu(self) -> float:
+        """Alias for v_0 to stick to usual SABR notation"""
+        return self.v_0
 
     @property
     def alpha(self) -> float:
