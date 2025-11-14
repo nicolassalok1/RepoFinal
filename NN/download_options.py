@@ -120,11 +120,11 @@ def main() -> None:
     data = data[(data["K"] >= strike_lower) & (data["K"] <= strike_upper)]
 
     data = data.sort_values(by=["T", "K"]).reset_index(drop=True)
-    data['T'] = data['T'].round(2)
-    data['iv'] = data['iv'].round(2)
-    data['S0'] = data['S0'].round(2)
+    raw_data = data.copy()
+
     data["T"] = data["T"].round(2)
     data["iv"] = data["iv"].round(2)
+    data["S0"] = data["S0"].round(2)
 
     if data.empty:
         print("Error: no clean option rows remain after filtering.")
@@ -137,14 +137,26 @@ def main() -> None:
 
     calls = data[data["type"] == "C"]
     puts = data[data["type"] == "P"]
+    raw_calls = raw_data[raw_data["type"] == "C"]
+    raw_puts = raw_data[raw_data["type"] == "P"]
     if not calls.empty:
         call_path = Path(__file__).with_name(f"options_{ticker}_calls.csv")
         calls.to_csv(call_path, index=False)
         print(f"Saved call subset: {call_path.name} ({len(calls)} rows)")
+        if not raw_calls.empty:
+            heston_call_path = Path(__file__).with_name("Heston_call.csv")
+            raw_calls_to_save = raw_calls.drop(columns=["type"], errors="ignore")
+            raw_calls_to_save.to_csv(heston_call_path, index=False)
+            print(f"Saved Heston training call snapshot: {heston_call_path.name}")
     if not puts.empty:
         put_path = Path(__file__).with_name(f"options_{ticker}_puts.csv")
         puts.to_csv(put_path, index=False)
         print(f"Saved put subset: {put_path.name} ({len(puts)} rows)")
+        if not raw_puts.empty:
+            heston_put_path = Path(__file__).with_name("Heston_put.csv")
+            raw_puts_to_save = raw_puts.drop(columns=["type"], errors="ignore")
+            raw_puts_to_save.to_csv(heston_put_path, index=False)
+            print(f"Saved Heston training put snapshot: {heston_put_path.name}")
 
 
 if __name__ == "__main__":
