@@ -1,7 +1,7 @@
 """
 Download SPY option data from Yahoo Finance and keep only contracts that fall on a
-regular (T, K) grid: T ∈ [0.01, 2.0] with 0.01 increments, and K ∈ [S0-100, S0+100]
-with a stride of 1.0. The filtered dataset is stored as test.csv for downstream use.
+regular (T, K) grid: T ∈ [1/12, 2.0] with monthly (≈0.08333) increments, and K ∈ [S0-100, S0+100]
+with a stride of 10. The filtered dataset is stored as test.csv for downstream use.
 """
 
 from __future__ import annotations
@@ -45,11 +45,10 @@ def download_grid(ticker: str) -> pd.DataFrame:
     if not expirations:
         raise RuntimeError("No option expirations available for ticker.")
 
-    min_T, max_T, step_T = 0.01, 2.0, 0.01
-    T_bins = np.arange(min_T, max_T + 1e-12, step_T)
-    min_K = math.floor(S0 - 100.0)
-    max_K = math.ceil(S0 + 100.0)
-    strike_grid = np.arange(min_K, max_K + 1, 1.0)
+    min_T, max_T, step_T = 1.0 / 12.0, 2.0, 1.0 / 12.0
+    min_K = math.floor((S0 - 100.0) / 10.0) * 10.0
+    max_K = math.ceil((S0 + 100.0) / 10.0) * 10.0
+    strike_step = 10.0
 
     records = []
     for expiry in expirations:
@@ -57,7 +56,7 @@ def download_grid(ticker: str) -> pd.DataFrame:
         T_rounded = round(T_years, 4)
         if T_rounded < min_T or T_rounded > max_T:
             continue
-        # snap maturities to the nearest 0.01 grid
+        # snap maturities to the nearest monthly (1/12) grid
         T_snap = float(np.round(T_rounded / step_T) * step_T)
         if not (min_T <= T_snap <= max_T):
             continue
@@ -74,7 +73,7 @@ def download_grid(ticker: str) -> pd.DataFrame:
                 strike = row.get("strike", np.nan)
                 if pd.isna(strike):
                     continue
-                strike_snap = float(np.round(strike))
+                strike_snap = float(np.round(strike / strike_step) * strike_step)
                 if abs(strike - strike_snap) > 1e-6:
                     continue
                 if strike_snap < min_K or strike_snap > max_K:
@@ -86,7 +85,7 @@ def download_grid(ticker: str) -> pd.DataFrame:
                     {
                         "S0": S0,
                         "K": strike_snap,
-                        "T": T_snap,
+                        "T": round(T_snap, 2),
                         "C_mkt": price,
                         "type": opt_type,
                         "iv": row.get("impliedVolatility", np.nan),
