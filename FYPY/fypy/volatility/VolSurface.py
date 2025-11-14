@@ -1,6 +1,6 @@
 import numpy as np
 from abc import ABC, abstractmethod
-from typing import Union, Dict, Sequence
+from typing import Union, Dict, Sequence, Optional
 
 from scipy.interpolate import interp1d
 
@@ -51,38 +51,55 @@ class ConstantVolSurface(ModelVolSurface):
 
 class ModelVolSurfaceSlices(ModelVolSurface):
     def __init__(self,
-                 slices: Dict[float, ModelVolSlice]):
+                 slices: Dict[float, ModelVolSlice],
+                 strike_converter: Optional[StrikeConverter] = None):
         self._slices = slices
         self._ttms = np.array(list(slices.keys()))
         self._ttms.sort()
-        super().__init__(strike_converter=slices[self._ttms[0]].strike_converter)
+        converter = strike_converter or slices[self._ttms[0]].strike_converter
+        super().__init__(strike_converter=converter)
 
     @staticmethod
     def from_market_surface(market_surface: MarketSurface,
-                            strike_converter: StrikeConverter = LogRelativeStrikeConverter()
+                            strike_converter: Optional[StrikeConverter] = None
                             ) -> 'ModelVolSurfaceSlices':
+        if strike_converter is None:
+            strike_converter = LogRelativeStrikeConverter(market_surface.forward_curve)
+        elif isinstance(strike_converter, LogRelativeStrikeConverter) and not strike_converter.has_forward_curve:
+            strike_converter = strike_converter.set_forward_curve(market_surface.forward_curve)
+
         slices = {}
         for ttm, market_slice in market_surface.slices.items():
             slices[ttm] = InterpolatedVolSlice.from_market_slice(market_slice=market_slice,
                                                                  strike_converter=strike_converter)
 
-        return ModelVolSurfaceSlices(slices=slices)
+        return ModelVolSurfaceSlices(slices=slices, strike_converter=strike_converter)
 
     @staticmethod
     def from_pricer(pricer: StrikesPricer,
-                    foward_curve: ForwardCurve,
+                    forward_curve: Optional[ForwardCurve] = None,
                     ttms: Sequence[float],
                     ivc: ImpliedVolCalculator,
                     num_strikes: int = 100,
                     std_devs: float = 4,
                     sigma: float = 0.4,
-                    strike_converter: StrikeConverter = LogRelativeStrikeConverter()
+                    strike_converter: Optional[StrikeConverter] = None,
+                    **kwargs
                     ) -> 'ModelVolSurfaceSlices':
+        if forward_curve is None:
+            forward_curve = kwargs.pop('foward_curve', None)
+        if forward_curve is None:
+            raise ValueError("forward_curve must be provided (legacy name 'foward_curve' is also accepted).")
+        if strike_converter is None:
+            strike_converter = LogRelativeStrikeConverter(forward_curve)
+        elif isinstance(strike_converter, LogRelativeStrikeConverter) and not strike_converter.has_forward_curve:
+            strike_converter = strike_converter.set_forward_curve(forward_curve)
+
         slices = {}
         is_calls = np.ones(num_strikes, dtype=bool)
         is_calls[:int(num_strikes / 2)] = False
         for ttm in ttms:
-            F = foward_curve(ttm)
+            F = forward_curve(ttm)
             dev = np.exp(sigma * std_devs * np.sqrt(ttm))
             left = F / dev
             right = F * dev
@@ -93,7 +110,7 @@ class ModelVolSurfaceSlices(ModelVolSurface):
             slices[ttm] = InterpolatedVolSlice.from_market_strikes(ttm=ttm, fwd=F, vols=vols, K=Ks,
                                                                    strike_converter=strike_converter)
 
-        return ModelVolSurfaceSlices(slices=slices)
+        return ModelVolSurfaceSlices(slices=slices, strike_converter=strike_converter)
 
     def model_vol(self, x: Union[float, np.ndarray], T: float) -> Union[float, np.ndarray]:
         T = max(1e-07, T)
