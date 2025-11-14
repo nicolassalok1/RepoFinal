@@ -77,9 +77,9 @@ class ModelVolSurfaceSlices(ModelVolSurface):
 
     @staticmethod
     def from_pricer(pricer: StrikesPricer,
-                    forward_curve: Optional[ForwardCurve] = None,
                     ttms: Sequence[float],
                     ivc: ImpliedVolCalculator,
+                    forward_curve: Optional[ForwardCurve] = None,
                     num_strikes: int = 100,
                     std_devs: float = 4,
                     sigma: float = 0.4,

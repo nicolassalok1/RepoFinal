@@ -71,7 +71,13 @@ class InterpolatedVolSlice(ModelVolSlice):
     def from_model_strikes(x: np.ndarray, vols: np.ndarray, ttm: float, fwd: float,
                            strike_converter: StrikeConverter = LogRelativeStrikeConverter()):
         # TODO: allow other interpolations
-        interp = interp1d(x=x, y=vols, assume_sorted=True)
+        interp = interp1d(
+            x=x,
+            y=vols,
+            assume_sorted=True,
+            bounds_error=False,
+            fill_value=(vols[0], vols[-1])
+        )
         return InterpolatedVolSlice(ttm=ttm,
                                     fwd=fwd,
                                     interpolation=interp,
