@@ -9,18 +9,24 @@ class OptResult(object):
                  params: np.ndarray,
                  value: float,
                  success: bool,
-                 message: str = ""):
+                 message: str = "",
+                 n_iter: Optional[int] = None,
+                 loss: Optional[float] = None):
         """
         Result of optimization over parameters.
         :param params: np.ndarray, the optimal parameters
         :param value: float, the optimal objective value
         :param success: bool, true if optimization succeeded, else false
         :param message: str, messaging indicating status of optimization
+        :param n_iter: Optional[int], number of optimization iterations (if available)
+        :param loss: Optional[float], final value of the loss / objective function (if available)
         """
         self.params = params
         self.value = value
         self.success = success
         self.message = message
+        self.n_iter = n_iter
+        self.loss = loss
 
 
 class Minimizer(ABC):
@@ -132,8 +138,12 @@ class LeastSquares(Minimizer):
                             loss=self._loss,
                             verbose=self._verbose)
 
-        return OptResult(params=fit.x, value=fit.fun, success=fit.success,
-                         message=fit.message)
+        return OptResult(params=fit.x,
+                         value=fit.fun,
+                         success=fit.success,
+                         message=fit.message,
+                         n_iter=getattr(fit, "nit", None),
+                         loss=getattr(fit, "cost", None))
 
 
 class ScipyMinimizer(Minimizer):
@@ -155,4 +165,9 @@ class ScipyMinimizer(Minimizer):
                        bounds=bounds, constraints=constraints,
                        options=self._options, tol=self._tol)
 
-        return OptResult(params=fit.x, value=fit.fun, success=fit.success, message=fit.message)
+        return OptResult(params=fit.x,
+                         value=fit.fun,
+                         success=fit.success,
+                         message=fit.message,
+                         n_iter=getattr(fit, "nit", None),
+                         loss=fit.fun)
