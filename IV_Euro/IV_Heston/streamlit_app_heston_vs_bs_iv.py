@@ -297,7 +297,7 @@ def prepare_iv_surface(
     df_sel = df_sel.sort_values(["T", "K"])
     surface = df_sel.pivot_table(index="T", columns="K", values=iv_column, aggfunc="mean")
     surface = surface.sort_index().sort_index(axis=1)
-    surface = surface.interpolate(axis=0, limit_direction="both").interpolate(axis=1, limit_direction="both")
+    surface = surface.interpolate(axis=1, limit_direction="both").interpolate(axis=1, limit_direction="both")
     if surface.empty:
         raise ValueError(f"Surface vide pour {iv_column}.")
     return surface
