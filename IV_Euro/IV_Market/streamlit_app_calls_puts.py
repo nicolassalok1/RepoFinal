@@ -48,6 +48,63 @@ def _select_monthly_expirations(
     return [(dt.datetime.combine(item[0], dt.time()), item[1]) for item in selected]
 
 
+def _normal_cdf(x: float) -> float:
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+
+def _bs_price(S0: float, K: float, T: float, vol: float, r: float, option_type: str) -> float:
+    if T <= 0.0 or vol <= 0.0:
+        intrinsic_call = max(0.0, S0 - K * math.exp(-r * T))
+        intrinsic_put = max(0.0, K * math.exp(-r * T) - S0)
+        return intrinsic_call if option_type == "call" else intrinsic_put
+    sqrt_T = math.sqrt(T)
+    vol_sqrt_T = vol * sqrt_T
+    d1 = (math.log(S0 / K) + (r + 0.5 * vol * vol) * T) / vol_sqrt_T
+    d2 = d1 - vol_sqrt_T
+    discount = math.exp(-r * T)
+    if option_type == "call":
+        return S0 * _normal_cdf(d1) - K * discount * _normal_cdf(d2)
+    return K * discount * _normal_cdf(-d2) - S0 * _normal_cdf(-d1)
+
+
+def implied_vol(price: float, S0: float, K: float, T: float, r: float, option_type: str) -> float:
+    if T <= 0.0 or price <= 0.0 or S0 <= 0.0 or K <= 0.0:
+        return 0.0
+    intrinsic = _bs_price(S0, K, T, 0.0, r, option_type)
+    if price <= intrinsic + 1e-8:
+        return 0.0
+    vol_low, vol_high = 1e-6, 1.0
+    price_high = _bs_price(S0, K, T, vol_high, r, option_type)
+    while price_high < price and vol_high < 5.0:
+        vol_high *= 2.0
+        price_high = _bs_price(S0, K, T, vol_high, r, option_type)
+    if price_high < price:
+        return float("nan")
+    for _ in range(100):
+        vol_mid = 0.5 * (vol_low + vol_high)
+        price_mid = _bs_price(S0, K, T, vol_mid, r, option_type)
+        if abs(price_mid - price) < 1e-6:
+            return vol_mid
+        if price_mid > price:
+            vol_high = vol_mid
+        else:
+            vol_low = vol_mid
+    return 0.5 * (vol_low + vol_high)
+
+
+def add_implied_vol(df: pd.DataFrame, price_col: str, option_type: str, r: float) -> pd.DataFrame:
+    df = df.copy()
+    if "iv" in df.columns:
+        df = df.drop(columns=["iv"])
+    iv_values = []
+    for row in df.itertuples(index=False):
+        price = getattr(row, price_col, 0.0)
+        iv = implied_vol(float(price), float(row.S0), float(row.K), float(row.T), r, option_type)
+        iv_values.append(iv)
+    df["iv"] = iv_values
+    return df
+
+
 @st.cache_data(show_spinner=False, ttl=1800)
 def download_option_data(symbol: str, years_ahead: float, option_type: str) -> pd.DataFrame:
     ticker = yf.Ticker(symbol)
@@ -150,6 +207,7 @@ with st.sidebar:
     ticker_input = st.text_input("Ticker", value="SPY").strip().upper()
     st.caption(f"Expirations pulled up to {MAX_LOOKAHEAD_YEARS} years ahead.")
     strike_width = st.slider("Strike window around S₀", min_value=50, max_value=200, value=100, step=10)
+    risk_free_rate = st.slider("Risk-free rate r", min_value=-0.01, max_value=0.10, value=0.02, step=0.005)
     run_button = st.button("Fetch & Plot")
 
 
@@ -163,8 +221,10 @@ if run_button:
             st.success(
                 f"Fetched {len(df_calls_raw)} call rows and {len(df_puts_raw)} put rows for {ticker_input}."
             )
-            df_calls, surface_calls, spot = prepare_surface(df_calls_raw, strike_width)
-            df_puts, surface_puts, _ = prepare_surface(df_puts_raw, strike_width)
+            df_calls_iv = add_implied_vol(df_calls_raw, "C_mkt", "call", risk_free_rate)
+            df_puts_iv = add_implied_vol(df_puts_raw, "P_mkt", "put", risk_free_rate)
+            df_calls, surface_calls, spot = prepare_surface(df_calls_iv, strike_width)
+            df_puts, surface_puts, _ = prepare_surface(df_puts_iv, strike_width)
 
             st.write(
                 f"Spot ≈ {spot:.2f}. Strike window [{df_calls['K'].min():.2f}, {df_calls['K'].max():.2f}] "
