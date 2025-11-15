@@ -97,7 +97,10 @@ def build_uniform_surface(
                 }
             )
     df_out = pd.DataFrame(rows_out)
+    df_out["S0"] = S0_param
+    df_out["T"] = np.floor(df_out["T"] * 100.0) / 100.0
     df_out = df_out.sort_values(["K", "T"]).reset_index(drop=True)
+    df_out = df_out[["S0", "K", "T", "price", "iv", "source"]]
     return df_out, unique_K, T_grid
 
 
