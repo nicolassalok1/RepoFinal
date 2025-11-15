@@ -9,8 +9,7 @@ import pandas as pd
 
 INPUT_CSV = "test_calls.csv"
 OUTPUT_CSV = "uniform_surface.csv"
-S0 = 100.0
-R = 0.0
+R = 0.02
 Q = 0.0
 MATURITY_GRID_MONTHS = 12
 MATURITY_TOL = 1e-6
@@ -42,21 +41,27 @@ def _infer_price_column(df: pd.DataFrame) -> str:
     )
 
 
-def load_input(path: str) -> pd.DataFrame:
+def load_input(path: str) -> Tuple[pd.DataFrame, float]:
     df = pd.read_csv(path)
     price_column = _infer_price_column(df)
     if price_column != "price":
         df = df.rename(columns={price_column: "price"})
-    missing_columns = {"K", "T", "price", "iv"} - set(df.columns)
+    missing_columns = {"S0", "K", "T", "price", "iv"} - set(df.columns)
     if missing_columns:
         raise ValueError(f"Input CSV missing required columns: {missing_columns}")
     if "type" in df.columns:
         df = df[df["type"].str.upper() == "C"].copy()
     if df.empty:
         raise ValueError("Input CSV does not contain any call option rows.")
-    for col in ["K", "T", "price", "iv"]:
+    for col in ["S0", "K", "T", "price", "iv"]:
         df[col] = df[col].astype(float)
-    return df[["K", "T", "price", "iv"]]
+    unique_S0 = df["S0"].unique()
+    if len(unique_S0) != 1:
+        raise ValueError(
+            f"Input CSV must contain a single underlying price S0. Found: {unique_S0}"
+        )
+    S0_value = float(unique_S0[0])
+    return df[["K", "T", "price", "iv"]], S0_value
 
 
 def build_uniform_surface(
@@ -97,8 +102,8 @@ def build_uniform_surface(
 
 
 def main() -> None:
-    df = load_input(INPUT_CSV)
-    df_out, unique_K, T_grid = build_uniform_surface(df, S0, R, Q)
+    df, S0_value = load_input(INPUT_CSV)
+    df_out, unique_K, T_grid = build_uniform_surface(df, S0_value, R, Q)
     df_out.to_csv(OUTPUT_CSV, index=False)
     print(f"Unique strikes: {len(unique_K)}")
     expected_rows = len(unique_K) * len(T_grid)
