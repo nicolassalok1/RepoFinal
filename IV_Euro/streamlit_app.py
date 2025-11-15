@@ -14,6 +14,7 @@ import streamlit as st
 import yfinance as yf
 
 MAX_LOOKAHEAD_YEARS = 3
+MIN_MATURITY = 0.1
 
 st.set_page_config(page_title="Implied Volatility Surface", layout="wide")
 st.title("3D Implied Volatility Surface")
@@ -78,9 +79,7 @@ def download_option_data(symbol: str, years_ahead: float) -> pd.DataFrame:
 
 
 @st.cache_data(show_spinner=False)
-def prepare_surface(
-    df_raw: pd.DataFrame, strike_width: float, min_maturity: float
-) -> Tuple[pd.DataFrame, pd.DataFrame, float]:
+def prepare_surface(df_raw: pd.DataFrame, strike_width: float) -> Tuple[pd.DataFrame, pd.DataFrame, float]:
     required_cols = {"S0", "K", "T", "C_mkt", "iv"}
     missing = required_cols - set(df_raw.columns)
     if missing:
@@ -90,7 +89,7 @@ def prepare_surface(
     upper_bound = math.ceil((spot + strike_width) / 10.0) * 10.0
     mask = (df_raw["K"] >= lower_bound) & (df_raw["K"] <= upper_bound)
     df = df_raw.loc[mask].copy()
-    df = df[df["T"] >= min_maturity]
+    df = df[df["T"] >= MIN_MATURITY]
     if df.empty:
         raise ValueError("No strikes/maturities within the specified constraints.")
     df = df.sort_values(["T", "K"]).reset_index(drop=True)
@@ -102,7 +101,7 @@ def prepare_surface(
     surface = surface.interpolate(axis=1, limit_direction="both").interpolate(
         axis=1, limit_direction="both"
     )
-    surface = surface.loc[surface.index >= min_maturity]
+    surface = surface.loc[surface.index >= MIN_MATURITY]
     if surface.empty:
         raise ValueError("Not enough maturities to build a surface.")
     return df, surface, spot
@@ -112,9 +111,6 @@ with st.sidebar:
     ticker_input = st.text_input("Ticker", value="SPY").strip().upper()
     st.caption(f"Expirations pulled up to {MAX_LOOKAHEAD_YEARS} years ahead.")
     strike_width = st.slider("Strike window around S₀", min_value=50, max_value=200, value=100, step=10)
-    min_maturity = st.slider(
-        "Minimum maturity (years)", min_value=0.01, max_value=1.0, value=0.1, step=0.01
-    )
     run_button = st.button("Fetch & Plot")
 
 
@@ -143,7 +139,7 @@ def plot_surface(surface: pd.DataFrame, spot: float) -> go.Figure:
     fig.update_layout(
         title="Interpolated Implied Volatility Surface (S₀ ± window)",
         scene=dict(
-            xaxis=dict(title=dict(text="Strike K — <span style='color:#ff0000'>S0</span>")),
+            xaxis=dict(title=dict(text="Strike K — spot price ≈ {:.2f}".format(spot))),
             yaxis=dict(title="Time to Maturity T (years)", range=[t_min, t_max]),
             zaxis=dict(title="Implied Volatility"),
         ),
@@ -161,16 +157,15 @@ if run_button:
             df_raw = download_option_data(ticker_input, MAX_LOOKAHEAD_YEARS)
             st.success(f"Fetched {len(df_raw)} call rows for {ticker_input}.")
             try:
-                df_filtered, surface, spot = prepare_surface(df_raw, strike_width, min_maturity)
+                df_filtered, surface, spot = prepare_surface(df_raw, strike_width)
             except ValueError as err:
                 st.error(str(err))
             else:
                 st.write(
                     f"Spot ≈ {spot:.2f}. Keeping strikes in "
                     f"[{df_filtered['K'].min():.2f}, {df_filtered['K'].max():.2f}] "
-                    f"with maturities ≥ {min_maturity:.2f} years."
+                    f"with maturities ≥ {MIN_MATURITY:.2f} years."
                 )
-                st.dataframe(df_filtered[["S0", "K", "T", "C_mkt", "iv"]], height=300)
                 fig = plot_surface(surface, spot)
                 st.plotly_chart(fig, use_container_width=True)
         except Exception as exc:  # noqa: BLE001
