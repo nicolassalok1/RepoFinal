@@ -28,7 +28,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(ROOT / "Heston" / "NN"))
 
-from heston_torch import HestonParams, carr_madan_call_torch  # type: ignore  # noqa: E402
+from IV_HEAT_MKT_BS_HES.heston_torch import HestonParams, carr_madan_call_torch  # type: ignore  # noqa: E402
 
 torch.set_default_dtype(torch.float64)
 DEVICE = torch.device("cpu")

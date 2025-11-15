@@ -4,7 +4,7 @@ from __future__ import annotations
 import torch
 
 from bs_iv import bs_call_torch, iv_call_brent_torch
-from heston_torch import HestonParams, heston_cf
+from IV_HEAT_MKT_BS_HES.heston_torch import HestonParams, heston_cf
 from model import HestonParamNet, price_with_params, rmse_loss
 
 

@@ -6,7 +6,7 @@ from typing import Tuple
 import torch
 from torch import nn
 
-from heston_torch import HestonParams, carr_madan_call_torch
+from IV_HEAT_MKT_BS_HES.heston_torch import HestonParams, carr_madan_call_torch
 
 
 class HestonParamNet(nn.Module):
