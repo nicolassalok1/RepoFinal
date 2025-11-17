@@ -80,8 +80,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--output",
-        default="Basket/data/closing_prices.csv",
-        help="Chemin du CSV de sortie (défaut: Basket/data/closing_prices.csv).",
+        default="data/ticker_prices.csv",
+        help="Chemin du CSV de sortie (défaut: data/ticker_prices.csv).",
     )
 
     args = parser.parse_args()
