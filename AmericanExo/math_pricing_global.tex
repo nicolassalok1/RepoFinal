@@ -1,0 +1,788 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[french]{babel}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{bm}
+\usepackage{geometry}
+\usepackage{hyperref}
+\geometry{margin=2.5cm}
+
+\title{Notes de cours sur le pricing d'options\\[0.3em]
+PDE (Crank--Nicolson), Monte Carlo, Longstaff--Schwartz, arbres CRR, barrières et lookbacks}
+\author{}
+\date{}
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+\newpage
+
+%======================================================================
+\section*{Avant-propos}
+\addcontentsline{toc}{section}{Avant-propos}
+
+Ces notes résument et expliquent, de manière pédagogique, les méthodes de
+pricing implémentées dans le projet :
+\begin{itemize}
+  \item schéma de Crank--Nicolson pour la PDE de Black--Scholes
+        (options européennes, américaines, bermudéennes, barrières) ;
+  \item méthodes de Monte Carlo (classique et Longstaff--Schwartz) ;
+  \item modèle binomial de Cox--Ross--Rubinstein (CRR) ;
+  \item pricers analytiques et numériques pour options barrières et lookback.
+\end{itemize}
+
+L'objectif est double :
+\begin{enumerate}
+  \item donner un cadre mathématique \emph{clair} (équations, hypothèses) ;
+  \item faire le lien avec la \emph{mise en œuvre numérique} telle
+        qu'elle apparaît dans le code et dans l'application Streamlit
+        \texttt{pricing\_app.py}.
+\end{enumerate}
+
+Le lecteur peut parcourir ces notes comme un mini cours d'introduction
+au calcul stochastique appliqué à la finance de marché.
+
+\newpage
+
+%======================================================================
+\section{Cadre général du pricing d'options}
+
+\subsection{Portefeuille sans arbitrage et mesure risque--neutre}
+
+On se place dans un marché frictionless composé :
+\begin{itemize}
+  \item d'un actif sans risque $B_t$ vérifiant $dB_t = r B_t\,dt$, donc
+        $B_t = e^{rt}$ pour un taux sans risque constant $r$ ;
+  \item d'un actif risqué $S_t$ (l'action sous--jacente).
+\end{itemize}
+
+Le principe d'absence d'arbitrage, couplé avec la complétude du marché
+dans le modèle de Black--Scholes, garantit l'existence d'une \emph{mesure
+risque--neutre} $\mathbb{Q}$ sous laquelle le prix escompté d'un actif
+financier est une martingale. Pour un dérivé de payoff $f(S_T)$ à la
+maturité $T$, son prix à la date $t$ est
+\begin{equation}
+  V(t,S_t)
+  = \mathbb{E}^{\mathbb{Q}}\Bigl[
+      e^{-r(T-t)} f(S_T)
+      \,\big|\, \mathcal{F}_t
+    \Bigr].
+\end{equation}
+
+En particulier, à la date initiale $t=0$ :
+\begin{equation}
+  V(0,S_0)
+  = \mathbb{E}^{\mathbb{Q}}\bigl[
+      e^{-rT} f(S_T)
+    \bigr].
+\end{equation}
+
+Nous allons voir plusieurs façons de calculer (ou d'approximer)
+cette quantité.
+
+\subsection{Modèle Black--Scholes en temps continu}
+
+Sous la mesure risque--neutre, on suppose que le sous--jacent suit
+un mouvement brownien géométrique avec dividende continu $d$ :
+\begin{equation}
+  dS_t = (r-d) S_t\,dt + \sigma S_t\,dW_t,
+\end{equation}
+où $\sigma>0$ est la volatilité et $W_t$ un mouvement brownien standard.
+
+La solution explicite de cette E.D.S. est donnée par
+\begin{equation}
+  S_t = S_0 \exp\Bigl(
+    \bigl(r-d-\tfrac12\sigma^2\bigr)t + \sigma W_t
+  \Bigr).
+\end{equation}
+
+Ce modèle, bien que simplificateur, permet d'obtenir :
+\begin{itemize}
+  \item des formules fermées (Black--Scholes) pour certaines options vanille ;
+  \item une PDE par la méthode de réplication ;
+  \item une distribution lognormale explicite de $S_T$, utile pour Monte Carlo.
+\end{itemize}
+
+Dans le projet, on rencontre aussi le modèle de Heston, où la variance
+du sous--jacent est elle--même stochastique. Mathématiquement, les idées
+de base restent similaires mais les calculs deviennent plus lourds ;
+Monte Carlo est alors particulièrement naturel.
+
+%======================================================================
+\section{Pricing par PDE et schéma de Crank--Nicolson}
+
+Cette section détaille la construction mathématique du pricer basé sur
+la PDE de Black--Scholes et sa discrétisation par un schéma de
+Crank--Nicolson en log--prix. C'est la base de l'onglet
+\og Bermuda / Barrier (Crank--Nicolson) \fg{} de l'application.
+
+\subsection{PDE de Black--Scholes}
+
+On note $V(t,S)$ le prix d'une option en $t$ lorsque $S_t=S$.
+En appliquant la formule d'Itô au portefeuille auto--finançant qui
+rédplique le payoff, on obtient la PDE de Black--Scholes :
+\begin{equation}
+  \partial_t V
+  + \tfrac12 \sigma^2 S^2 \partial_{SS} V
+  + (r-d)S\partial_S V
+  - r V = 0,
+  \qquad 0\le t < T,\ S>0,
+\end{equation}
+avec condition terminale
+\begin{equation}
+  V(T,S) = f(S),
+\end{equation}
+où $f$ est le payoff (par exemple $(S-K)^+$ pour un call).
+
+Cette PDE exprime l'équilibre entre la dynamique stochastique de $S_t$ et
+la gestion d'un portefeuille de couverture.
+
+\subsection{Changement de variables en log--prix}
+
+Afin de rendre le problème plus stable numériquement, on introduit la
+variable de log--prix
+\begin{equation}
+  x = \ln S,\qquad S=e^x,
+\end{equation}
+et on définit une nouvelle fonction
+\begin{equation}
+  u(t,x) = V(t,e^x).
+\end{equation}
+
+En utilisant la règle de dérivation en chaîne, on a :
+\begin{align}
+  \partial_S V(t,S)
+  &= \frac{1}{S}\,\partial_x u(t,x),\\
+  \partial_{SS} V(t,S)
+  &= \frac{1}{S^2}\bigl(\partial_{xx} u(t,x) - \partial_x u(t,x)\bigr).
+\end{align}
+
+En remplaçant dans la PDE, on obtient, pour $u$,
+\begin{equation}
+  \partial_t u
+  + \tfrac12 \sigma^2 \partial_{xx}u
+  + \bigl(r-d - \tfrac12 \sigma^2\bigr)\partial_x u
+  - r u = 0.
+\end{equation}
+
+Intuition :
+\begin{itemize}
+  \item passer en log--prix homogénéise les variations de $S$ (mêmes
+        increments en $x$ correspondent à des variations relatives
+        constantes en $S$) ;
+  \item la diffusion en $x$ est \og plus régulière \fg{}, ce qui améliore
+        la stabilité du schéma numérique.
+\end{itemize}
+
+\subsection{Temps restant à courir}
+
+On pose le temps inversé
+\begin{equation}
+  \tau = T - t, \qquad U(\tau,x) = u(T-\tau,x).
+\end{equation}
+Alors $\partial_\tau U = -\partial_t u$ et la PDE devient
+\begin{equation}
+  \partial_\tau U
+  = \tfrac12 \sigma^2 \partial_{xx}U
+  + \mu_X \partial_x U
+  - r U,
+\end{equation}
+où
+\begin{equation}
+  \mu_X = r-d - \tfrac12 \sigma^2.
+\end{equation}
+
+La condition terminale $u(T,x) = f(e^x)$ devient une condition
+\emph{initiale}
+\begin{equation}
+  U(0,x) = f(e^x).
+\end{equation}
+
+Nous avons donc transformé le problème en un problème de diffusion
+parabolique en temps croissant $\tau$.
+
+\subsection{Discrétisation en espace et en temps}
+
+On choisit un intervalle borné pour $x$ :
+\[
+  x \in [-x_{\max}, x_{\max}],
+\]
+avec typiquement $x_{\max} \approx 5\sigma\sqrt{T}$, ce qui permet de couvrir
+la plupart des mouvements possibles de $S$. On introduit une grille
+uniforme :
+\begin{align}
+  x_i &= -x_{\max} + i\Delta x,\qquad i=0,\dots,N,\\
+  \tau_n &= n\Delta\tau,\qquad n=0,\dots,J,\quad \Delta\tau = T/J.
+\end{align}
+On note $U_i^n \approx U(\tau_n, x_i)$.
+
+Les dérivées spatiales sont approximées par différences finies centrales :
+\begin{align}
+  \partial_x U(\tau_n,x_i)
+  &\approx \frac{U_{i+1}^n - U_{i-1}^n}{2\Delta x},\\[0.3em]
+  \partial_{xx} U(\tau_n,x_i)
+  &\approx \frac{U_{i+1}^n - 2U_i^n + U_{i-1}^n}{\Delta x^2}.
+\end{align}
+
+\subsection{Schéma de Crank--Nicolson}
+
+Le schéma de Crank--Nicolson est une méthode implicite
+à \emph{ordre 2 en temps}, construite comme la moyenne de l'Euler implicite
+et de l'Euler explicite appliqués à l'opérateur spatial.
+
+On note $\mathcal{L}$ l'opérateur différentiel
+\begin{equation}
+  \mathcal{L}U
+  = \tfrac12 \sigma^2 \partial_{xx}U
+    + \mu_X \partial_x U
+    - r U.
+\end{equation}
+Son approximation en différences finies sur la grille est notée
+$\mathcal{L}_h$.
+
+Le schéma de Crank--Nicolson s'écrit :
+\begin{equation}
+  \frac{U_i^{n+1} - U_i^n}{\Delta \tau}
+  = \tfrac12 \bigl(\mathcal{L}_h U^{n+1}\bigr)_i
+    + \tfrac12 \bigl(\mathcal{L}_h U^n\bigr)_i.
+\end{equation}
+
+En développant, on obtient, pour chaque $i$, une combinaison linéaire
+de $U_{i-1}^{n+1}$, $U_i^{n+1}$, $U_{i+1}^{n+1}$ égale à une combinaison
+connue de $U_{i-1}^{n}$, $U_i^{n}$, $U_{i+1}^{n}$. En notant
+$(U^n)_i = U_i^n$, on obtient finalement un système matriciel
+\begin{equation}
+  A\,U^{n+1} = B\,U^{n},
+\end{equation}
+où $A$ et $B$ sont des matrices tridiagonales construites à partir de
+coefficients $\{a_i,b_i,c_i\}$ (pour $A$) et de leurs opposés ou dérivés
+pour $B$.
+
+Dans le code, ces coefficients sont représentés par des vecteurs
+$(a,b,c)$, puis assemblés en matrices denses $A$ et $B$. Le pas de temps
+se fait par
+\begin{equation}
+  U^{n+1} = A^{-1} B U^n.
+\end{equation}
+
+\subsection{Payoff et conditions aux limites}
+
+\paragraph{Payoff terminal.}
+Pour un call européen de strike $K$ :
+\begin{equation}
+  f(S) = (S-K)^+ = \max(S-K,0),
+\end{equation}
+et pour un put :
+\begin{equation}
+  f(S) = (K-S)^+.
+\end{equation}
+Sur la grille en $x$, la condition initiale en temps $\tau=0$ est
+\begin{equation}
+  U_i^0 = f(e^{x_i}),\qquad i=0,\dots,N.
+\end{equation}
+
+\paragraph{Conditions aux bornes en $x$.}
+On doit également imposer des conditions aux limites pour $x=x_0$ et
+$x=x_N$ (les bords gauche et droit de la grille).
+
+Pour un call :
+\begin{itemize}
+  \item lorsque $S\to 0$ ($x\to -\infty$), l'option vaut $\approx 0$,
+        donc on impose $U(\tau,x_0)\approx 0$ ;
+  \item lorsque $S\to +\infty$ ($x\to +\infty$), on a asymptotiquement
+        $V \sim S$, donc une condition du type
+        \[
+          U(\tau,x_N) \approx e^{x_N} - K e^{-r\tau}
+        \]
+        est utilisée.
+\end{itemize}
+
+Pour un put, les rôles sont inversés :
+\begin{itemize}
+  \item pour $S\to 0$, $V \approx K e^{-r\tau}$ ;
+  \item pour $S\to +\infty$, $V\to 0$.
+\end{itemize}
+
+Ces conditions sont appliquées explicitement dans le code avant ou après
+chaque résolution de $A U^{n+1} = B U^n$.
+
+\subsection{Options américaines et bermudéennes}
+
+Pour une option américaine, l'exercice est autorisé en tout temps
+continu $t\in[0,T]$, mais en pratique on ne peut le considérer que
+sur une grille de dates.
+
+\paragraph{Point de vue théorie des arrêts.}
+Soit $\mathcal{T}_{t,T}$ l'ensemble des temps d'arrêt à valeurs dans
+$[t,T]$. Le prix vérifie
+\begin{equation}
+  V(t,S)
+  = \sup_{\tau\in\mathcal{T}_{t,T}}
+    \mathbb{E}^{\mathbb{Q}}\bigl[
+      e^{-r(\tau-t)} f(S_\tau)
+      \,\big|\, S_t=S
+    \bigr].
+\end{equation}
+Dans un cadre discret ($t=t_0 < t_1 < \dots < t_J=T$), l'exercice
+est restreint à ces dates.
+
+\paragraph{Implémentation numérique.}
+Dans le schéma CN, après avoir calculé $U^n$ par
+\[
+  U^n = A^{-1} B U^{n-1},
+\]
+on applique à chaque noeud $i$ la projection
+\begin{equation}
+  U_i^n \leftarrow \max\bigl(U_i^n, f(e^{x_i})\bigr),
+\end{equation}
+qui impose la contrainte que la valeur de l'option ne peut être
+inférieure au payoff immédiat (exercice instantané).
+
+Pour une option \emph{bermudéenne}, l'exercice n'est permis qu'à un
+sous--ensemble des dates de la grille :
+\[
+  0 < t_{n_1} < t_{n_2} < \dots < t_{n_k}=T.
+\]
+La projection $\max(\cdot,f)$ n'est appliquée que pour les indices
+$n\in\{n_1,\dots,n_k\}$. Dans le code, c'est implémenté via un paramètre
+du type \texttt{exercise\_step}.
+
+\subsection{Options barrières (up--and--out, double knock--out)}
+
+Les options barrières sont path--dépendantes : leur payoff dépend de
+la trajectoire maximale ou minimale du sous--jacent. Par exemple :
+\begin{itemize}
+  \item \emph{up--and--out} : l'option est annulée si le sous--jacent
+        franchit une barrière haute $H_u$ avant l'échéance ;
+  \item \emph{double knock--out} : l'option est annulée si $S_t$
+        sort d'un couloir $[H_d,H_u]$.
+\end{itemize}
+
+Dans le schéma CN en log--prix, on impose cette condition de manière
+discrète :
+\begin{itemize}
+  \item pour l'up--and--out, on annule $U_i^n$ dès que $e^{x_i} \ge H_u$ ;
+  \item pour le double knock--out, on annule $U_i^n$ si
+        $e^{x_i} \le H_d$ ou $e^{x_i} \ge H_u$.
+\end{itemize}
+
+Cela vaut à la fois sur la condition terminale (payoff) et à chaque
+pas de temps en remontant vers l'origine.
+
+\subsection{Extraction du prix et des grecs}
+
+Après avoir effectué les $J$ pas de temps, on obtient un vecteur $U^J$ qui
+représente la solution à la date initiale. Le prix pour $S_0$ est
+obtenu en prenant le noeud $x_{i^\star}$ tel que $e^{x_{i^\star}}\approx S_0$
+(souvent l'indice central) :
+\begin{equation}
+  \text{Price} \approx U_{i^\star}^J.
+\end{equation}
+
+Les sensibilités (\emph{grecs}) sont approchées par différences finies
+autour de ce point :
+\begin{align}
+  \Delta
+  &\approx \frac{U_{i^\star+1}^J - U_{i^\star-1}^J}{
+    S_0 e^{\Delta x} - S_0 e^{-\Delta x}},\\[0.3em]
+  \Gamma
+  &\approx \frac{
+      \dfrac{U_{i^\star+1}^J - U_{i^\star}^J}{S_0 e^{\Delta x} - S_0}
+      -
+      \dfrac{U_{i^\star}^J - U_{i^\star-1}^J}{S_0 - S_0 e^{-\Delta x}}
+    }{
+      \tfrac12\bigl(S_0 e^{\Delta x} - S_0 e^{-\Delta x}\bigr)
+    },\\[0.3em]
+  \Theta
+  &\approx -\frac{U_{i^\star}^J - U_{i^\star}^{J-1}}{\Delta t},
+\end{align}
+où $U^{J-1}$ est la solution à l'instant de temps immédiatement suivant.
+
+\medskip
+Cette partie correspond au contenu détaillé de \texttt{math\_bermuda\_barrier.tex}
+et au module de pricing PDE utilisé dans l'onglet \og Bermuda / Barrier \fg{}
+de l'application.
+
+%======================================================================
+\section{Pricing par Monte Carlo}
+
+Nous abordons maintenant la méthode de Monte Carlo, très flexible,
+utilisée pour estimer numériquement les espérances sous $\mathbb{Q}$.
+
+\subsection{Monte Carlo classique pour une option européenne}
+
+On considère une option de payoff $f(S_T)$. Le prix théorique est
+\begin{equation}
+  V_0 = \mathbb{E}^{\mathbb{Q}}\bigl[e^{-rT} f(S_T)\bigr].
+\end{equation}
+
+L'idée Monte Carlo est de générer $n$ trajectoires indépendantes
+$(S_t^{(k)})_{0\le t\le T}$, puis de calculer l'estimateur
+\begin{equation}
+  \hat{V}_n
+  = e^{-rT}\,\frac{1}{n} \sum_{k=1}^n f\bigl(S_T^{(k)}\bigr).
+\end{equation}
+
+Cet estimateur est sans biais et, sous des hypothèses standard, converge
+vers $V_0$ lorsque $n\to\infty$ (loi des grands nombres).
+
+\subsection{Erreur statistique et intervalle de confiance}
+
+On définit
+\begin{equation}
+  X_k = e^{-rT} f\bigl(S_T^{(k)}\bigr),
+\end{equation}
+supposées i.i.d.\ avec variance $\sigma_X^2$. L'estimateur est
+\begin{equation}
+  \hat{V}_n = \frac{1}{n} \sum_{k=1}^n X_k.
+\end{equation}
+
+Le théorème central limite assure que
+\begin{equation}
+  \sqrt{n}\,\frac{\hat{V}_n - V_0}{\hat{\sigma}_X}
+  \xrightarrow[n\to\infty]{\mathcal{L}} \mathcal{N}(0,1),
+\end{equation}
+où $\hat{\sigma}_X$ est l'écart--type empirique des $X_k$.
+
+Par conséquent, un intervalle de confiance asymptotique à niveau $1-\alpha$
+est
+\begin{equation}
+  \hat{V}_n \pm z_{1-\alpha/2}\,\frac{\hat{\sigma}_X}{\sqrt{n}},
+\end{equation}
+avec $z_{1-\alpha/2}$ le quantile de la loi normale standard.
+
+Dans le projet, la fonction \texttt{monte\_carlo\_simulation} implémente
+exactement cette idée, en affichant le prix estimé et l'intervalle de
+confiance.
+
+\subsection{Simulation de trajectoires}
+
+Pour le GBM, on utilise la solution explicite
+\begin{equation}
+  S_{t_{j+1}}^{(k)}
+  = S_{t_j}^{(k)} \exp\Bigl(
+      (r - d - \tfrac12\sigma^2)\Delta t
+      + \sigma \sqrt{\Delta t}\,Z_{j+1}^{(k)}
+    \Bigr),
+\end{equation}
+avec $Z_{j+1}^{(k)}\sim\mathcal{N}(0,1)$ indépendants, et
+$\Delta t = T/m$.
+
+Pour Heston, les équations étant plus complexes, on utilise des schémas
+numériques (par exemple de type Euler ou Milstein) pour simuler à la fois
+$S_t$ et la variance $v_t$.
+
+%======================================================================
+\section{Algorithme de Longstaff--Schwartz}
+
+La méthode de Longstaff--Schwartz (2001) est une technique Monte Carlo
+pour valoriser des options américaines ou bermudéennes, c'est-à-dire
+des options avec exercice anticipé.
+
+\subsection{Problème d'optimisation d'arrêt optimal}
+
+On considère une suite de dates d'exercice possibles
+$0 = t_0 < t_1 < \dots < t_m = T$ et un payoff $f_j(S_{t_j})$ à la
+date $t_j$. Par exemple, pour un put américain,
+\begin{equation}
+  f_j(S) = (K-S)^+.
+\end{equation}
+
+On cherche à maximiser
+\begin{equation}
+  V_0
+  = \sup_{\tau\in\mathcal{T}}
+    \mathbb{E}^{\mathbb{Q}}\Bigl[
+      e^{-r\tau} f_\tau(S_\tau)
+    \Bigr],
+\end{equation}
+où $\mathcal{T}$ est l'ensemble des temps d'arrêt à valeurs dans
+$\{t_0,\dots,t_m\}$.
+
+\subsection{Idée de régression sur la valeur de continuation}
+
+La stratégie optimale se base sur la comparaison, à chaque date $t_j$,
+entre :
+\begin{itemize}
+  \item le payoff d'exercice immédiat $f_j(S_{t_j})$ ;
+  \item la valeur de continuation
+    \[
+      C_j(S_{t_j}) =
+      \mathbb{E}^{\mathbb{Q}}\bigl[
+        e^{-r\Delta t} V_{j+1}(S_{t_{j+1}})\,\big|\, S_{t_j}
+      \bigr].
+    \]
+\end{itemize}
+
+L'idée de Longstaff--Schwartz est d'approximer $C_j(\cdot)$ par une régression
+sur une base de fonctions (polynômes) à partir de trajectoires simulées.
+
+\subsection{Description pas à pas}
+
+On simule $n$ trajectoires $S_{t_j}^{(k)}$, $k=1,\dots,n$, $j=0,\dots,m$.
+\begin{enumerate}
+  \item À maturité $t_m=T$, on pose
+    \[
+      V_m^{(k)} = f_m\bigl(S_{t_m}^{(k)}\bigr).
+    \]
+  \item Pour $j=m-1,\dots,1$ (remontée en temps) :
+    \begin{enumerate}
+      \item On identifie les trajectoires où l'option est dans la monnaie :
+        \[
+          \mathcal{I}_j = \bigl\{k : f_j(S_{t_j}^{(k)}) > 0\bigr\}.
+        \]
+      \item Pour ces trajectoires, on considère les cash--flows actualisés
+        \[
+          Y^{(k)} = e^{-r\Delta t} V_{j+1}^{(k)}.
+        \]
+      \item On approxime $C_j$ par une régression
+        \[
+          Y^{(k)} \approx \sum_{\ell=0}^p \beta_{j,\ell}\,
+          \phi_\ell\bigl(S_{t_j}^{(k)}\bigr),\qquad k\in\mathcal{I}_j,
+        \]
+        où $\{\phi_\ell\}$ est une base (par exemple polynômes en $S$) et
+        $(\beta_{j,\ell})$ sont déterminés par moindres carrés.
+      \item Pour chaque trajectoire $k$, on calcule
+        \[
+          \hat{C}_j^{(k)} =
+          \sum_{\ell=0}^p \beta_{j,\ell}\,
+          \phi_\ell\bigl(S_{t_j}^{(k)}\bigr).
+        \]
+      \item Décision d'exercice :
+        \[
+          V_j^{(k)} =
+          \begin{cases}
+            f_j(S_{t_j}^{(k)}), &
+              \text{si } f_j(S_{t_j}^{(k)}) \ge \hat{C}_j^{(k)},\\[0.3em]
+            e^{-r\Delta t}\,V_{j+1}^{(k)}, &
+              \text{sinon.}
+          \end{cases}
+        \]
+    \end{enumerate}
+  \item Enfin, le prix est la moyenne des cash--flows actualisés obtenus
+    sur les trajectoires :
+    \[
+      \hat{V}_0 = \frac{1}{n}\sum_{k=1}^n V_0^{(k)}.
+    \]
+\end{enumerate}
+
+Dans le code, on utilise la fonction \texttt{numpy.polynomial.Polynomial.fit}
+pour ajuster un polynôme de degré 5 aux données $(S_{t_j}^{(k)},Y^{(k)})$,
+ce qui donne directement une approximation de $C_j$.
+
+%======================================================================
+\section{Modèle binomial de Cox--Ross--Rubinstein (CRR)}
+
+Le modèle CRR fournit une approximation discrète du mouvement brownien
+géométrique via un arbre binomial.
+
+\subsection{Construction de l'arbre}
+
+On divise la période $[0,T]$ en $n$ intervalles de longueur $\Delta t = T/n$.
+À chaque pas, le sous--jacent peut monter (up) ou descendre (down) de facteurs
+\begin{equation}
+  u = e^{\sigma\sqrt{\Delta t}},
+  \qquad
+  d = \frac{1}{u}.
+\end{equation}
+
+La valeur du sous--jacent au pas $j$ et dans l'état $i$ est
+\begin{equation}
+  S_{j,i} = S_0\,u^i d^{j-i},
+  \qquad 0\le i\le j.
+\end{equation}
+
+Sous la mesure risque--neutre, la probabilité d'un mouvement \og up \fg{}
+est choisie de manière à reproduire la dérive $r$ :
+\begin{equation}
+  p = \frac{e^{r\Delta t} - d}{u-d},\qquad q=1-p.
+\end{equation}
+
+\subsection{Valorisation par remontée dans l'arbre}
+
+Pour une option européenne de payoff $f(S_T)$, on fixe
+\begin{equation}
+  V_n^i = f(S_{n,i}),\qquad i=0,\dots,n.
+\end{equation}
+Puis, pour $j=n-1,\dots,0$,
+\begin{equation}
+  V_j^i = e^{-r\Delta t}
+  \bigl(p V_{j+1}^{i+1} + q V_{j+1}^i\bigr).
+\end{equation}
+Le prix initial est $V_0^0$.
+
+Pour une option américaine, on ajoute l'exercice anticipé :
+\begin{equation}
+  V_j^i
+  = \max\Bigl(
+      f(S_{j,i}),
+      e^{-r\Delta t}\bigl(p V_{j+1}^{i+1} + q V_{j+1}^i\bigr)
+    \Bigr).
+\end{equation}
+
+Dans le projet, la fonction \texttt{crr\_pricing} implémente précisément
+ce schéma pour un put américain.
+
+%======================================================================
+\section{Options barrières et lookback : formules fermées et PDE}
+
+Nous regroupons ici les aspects spécifiques aux options barrières
+et lookback, qui combinent techniques analytiques et EDP.
+
+\subsection{Option barrière up--and--out}
+
+On considère un call up--and--out avec barrière haute $B>K$. Le payoff est
+\begin{equation}
+  f(S_T) = (S_T-K)^+\,\mathbf{1}_{\{\max_{0\le u\le T} S_u < B\}}.
+\end{equation}
+
+Grâce au principe de réflexion pour le brownien, on peut exprimer le prix
+comme combinaison de termes de type Black--Scholes. On introduit
+les fonctions auxiliaires (dans le code : \texttt{delta\_p}, \texttt{delta\_m}) :
+\begin{align}
+  \delta_p(\tau, z, r, \sigma)
+    &= \frac{\ln z + (r + \frac12\sigma^2)\tau}{\sigma\sqrt{\tau}},\\
+  \delta_m(\tau, z, r, \sigma)
+    &= \frac{\ln z + (r - \frac12\sigma^2)\tau}{\sigma\sqrt{\tau}}.
+\end{align}
+
+Une formule typique pour le call up--and--out est
+\begin{align}
+  V_{\text{UO}}(t,S_0)
+  &= S_0\bigl[
+      N(\delta_p(\tau, S_0/K))
+      - N(\delta_p(\tau, S_0/B))
+    \bigr]
+  - K e^{-r\tau}
+    \bigl[
+      N(\delta_m(\tau, S_0/K))
+      - N(\delta_m(\tau, S_0/B))
+    \bigr]
+  \nonumber\\
+  &\quad
+  - B\Bigl(\frac{S_0}{B}\Bigr)^{-\frac{2r}{\sigma^2}}
+    \bigl[
+      N(\delta_p(\tau, B^2/(K S_0)))
+      - N(\delta_p(\tau, B/S_0))
+    \bigr]
+  \nonumber\\
+  &\quad
+  + K e^{-r\tau}
+    \Bigl(\frac{S_0}{B}\Bigr)^{-\frac{2r}{\sigma^2}+1}
+    \bigl[
+      N(\delta_m(\tau, B^2/(K S_0)))
+      - N(\delta_m(\tau, B/S_0))
+    \bigr],
+\end{align}
+avec $\tau = T-t$. La méthode \texttt{price\_exact} implémente une
+expression de ce type.
+
+\subsection{EDP pour le call barrière}
+
+La classe correspondante propose aussi une approche EDP, similaire à celle
+du call européen, mais sur un domaine spatial tronqué $S\in[K/3,B]$ et
+avec condition de Dirichlet $V=0$ sur la barrière $S=B$. Le schéma
+utilise les mêmes idées de Crank--Nicolson avec résolution tridiagonale
+par \texttt{const\_tri\_diag\_mat\_solve}.
+
+\subsection{Option lookback à strike flottant}
+
+Une option lookback à strike flottant a pour payoff
+\begin{equation}
+  f(S_T,M_T) = M_T - S_T,
+\end{equation}
+où $M_T = \max_{0\le u\le T} S_u$.
+
+On travaille souvent avec le ratio
+\begin{equation}
+  Z_T = \frac{S_T}{M_T}\in(0,1],
+\end{equation}
+qui est invariant par homothétie de $S$. En posant $z=Z_T$, on peut écrire
+le prix sous la forme
+\begin{equation}
+  V(t,S_0) = S_0\,v(z),
+\end{equation}
+et obtenir une EDP réduite pour $v$, ou une formule fermée en termes
+de fonctions normales.
+
+Dans le code, la méthode \texttt{price\_exact} utilise une expression
+du type
+\begin{align}
+  v(z)
+  &= (1+p) z\,N(\delta_p(\tau,z))
+   + e^{-r\tau} N\bigl(-\delta_m(\tau,z)\bigr)
+   - p e^{-r\tau} z^{1-p} N\bigl(-\delta_m(\tau,1/z)\bigr)
+   - z,
+\end{align}
+avec $p = \sigma^2/(2r)$ et $\tau=T-t$, puis renvoie $V(t,S_0) = S_0 v(z)$.
+Au temps initial, on a typiquement $z=1$ puisque $M_0=S_0$.
+
+\subsection{EDP et schéma numérique pour la lookback}
+
+Le pricer lookback dispose aussi d'une EDP en variables réduites
+$(\tau,x)$, avec un opérateur proche de celui du call européen. Les
+conditions aux frontières sont plus subtiles :
+\begin{itemize}
+  \item une condition Dirichlet sur une des frontières (valeur connue) ;
+  \item une condition de Neumann (dérivée) sur l'autre bord ;
+  \item un domaine spatial choisi en fonction de la variable de ratio.
+\end{itemize}
+
+Le système linéaire obtenu à chaque pas de temps est tridiagonal et
+résolu via \texttt{tri\_diag\_mat\_solve\_arr}. Enfin, on reconvertit
+le résultat dans les variables originales $(S,t)$ et on utilise une
+interpolation linéaire (\texttt{get\_result}) pour obtenir le prix
+exactement en $S_0$.
+
+\subsection{Monte Carlo pour la lookback}
+
+La méthode \texttt{price\_monte\_carlo} repose sur la simulation
+directe des trajectoires de $S_t$ et de son maximum, ce qui nécessite
+de simuler le brownien et son maximum conditionnel. Le payoff
+$M_T - S_T$ est évalué trajectoire par trajectoire, puis actualisé et
+moyenné.
+
+%======================================================================
+\section{Lien avec l'application Streamlit}
+
+Le fichier \texttt{pricing\_app.py} rassemble les différents pricers
+dans une interface interactive :
+\begin{itemize}
+  \item onglet \textbf{Bermuda / Barrier (Crank--Nicolson)} :
+    utilisation du schéma PDE en log--prix pour des options européennes,
+    américaines, bermudéennes et barrières, avec calcul des grecs.
+  \item onglet \textbf{Longstaff (MC / LS / BSM / CRR)} :
+    \begin{itemize}
+      \item Monte Carlo classique,
+      \item Monte Carlo Longstaff--Schwartz (américaine),
+      \item formule de Black--Scholes--Merton (européenne),
+      \item arbre CRR pour l'américaine.
+    \end{itemize}
+  \item onglet \textbf{Lookback / Barrier / European} :
+    \begin{itemize}
+      \item pricer analytique et EDP pour le call européen,
+      \item pricer barrière up--and--out (formule fermée + PDE),
+      \item pricer lookback à strike flottant (formule fermée + PDE + MC).
+    \end{itemize}
+\end{itemize}
+
+Chaque ensemble de paramètres que l'utilisateur choisit dans l'interface
+se traduit en paramètres d'entrée pour les fonctions et classes décrites
+dans ces notes. On peut ainsi visualiser de manière interactive :
+\begin{itemize}
+  \item l'impact de la volatilité, du taux, du nombre de pas de temps,
+        du nombre de trajectoires sur le prix et la précision ;
+  \item les différences entre méthodes (PDE vs MC vs CRR) ;
+  \item l'effet de l'exercice anticipé (américaine/bermudéenne) ou des
+        barrières et de la mémoire du maximum (lookback).
+\end{itemize}
+
+\bigskip
+Ces notes fournissent la \emph{charpente mathématique} sous--jacente
+au code : elles peuvent servir de support de cours ou de base pour
+faire évoluer les modèles (volatilité locale, sauts, etc.).
+
+\end{document}
+
