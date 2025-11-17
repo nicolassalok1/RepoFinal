@@ -1,0 +1,283 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[french]{babel}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{bm}
+\usepackage{geometry}
+\geometry{margin=2.5cm}
+
+\title{Mathématiques du pricer Crank--Nicolson pour options européennes, américaines, bermudéennes et barrières}
+\author{}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\section{Modèle sous-jacent et mesure risque--neutre}
+
+On travaille sous la mesure risque--neutre $\mathbb{Q}$, sous laquelle le sous--jacent
+$S_t$ suit un mouvement brownien géométrique avec dividende continu $d$ :
+\begin{equation}
+  dS_t = (r - d) S_t\,dt + \sigma S_t\,dW_t,
+\end{equation}
+où $r$ est le taux sans risque, $\sigma > 0$ la volatilité constante et $W_t$ un
+mouvement brownien standard.
+
+Le prix théorique d'une option de payoff $f(S_T)$ à maturité $T$ est
+\begin{equation}
+  V(0,S_0) = \mathbb{E}^{\mathbb{Q}}\bigl[e^{-rT} f(S_T)\,\big|\, S_0\bigr].
+\end{equation}
+
+Pour simplifier la résolution numérique, on travaille en variable de log--prix
+\begin{equation}
+  X_t = \ln S_t.
+\end{equation}
+En appliquant Itô, on obtient la dynamique
+\begin{equation}
+  dX_t = \Bigl(r - d - \tfrac12 \sigma^2\Bigr)\,dt + \sigma\, dW_t
+  = \mu_X\,dt + \sigma\, dW_t,
+\end{equation}
+avec $\mu_X = r - d - \tfrac12 \sigma^2$.
+
+\section{PDE de Black--Scholes en log--prix}
+
+Soit $V(t,S)$ le prix de l'option à la date $t$ lorsque $S_t=S$. Sous la mesure
+risque--neutre, $V$ satisfait la PDE de Black--Scholes classique
+\begin{equation}
+  \partial_t V
+  + \tfrac12 \sigma^2 S^2 \partial_{SS} V
+  + (r-d) S \partial_S V
+  - r V = 0,
+  \qquad 0 \le t < T,\ S>0,
+\end{equation}
+avec condition terminale $V(T,S) = f(S)$.
+
+On pose maintenant $x = \ln S$ et $u(t,x) = V(t, e^x)$. On a alors
+\begin{align}
+  \partial_S V &= \frac{1}{S}\,\partial_x u,\\
+  \partial_{SS} V &= \frac{1}{S^2}\bigl(\partial_{xx} u - \partial_x u\bigr).
+\end{align}
+En substituant dans la PDE on obtient
+\begin{equation}
+  \partial_t u
+  + \tfrac12 \sigma^2 \partial_{xx}u
+  + \bigl(r-d - \tfrac12 \sigma^2\bigr)\partial_x u
+  - r u = 0.
+\end{equation}
+
+Le code considère une grille finie en $x \in [-x_{\max}, x_{\max}]$, avec
+\begin{equation}
+  x_{\max} \simeq 5\,\sigma \sqrt{T},
+\end{equation}
+ce qui permet de couvrir un large intervalle de prix en $S$.
+
+Pour transformer le problème en temps restant à courir, on pose
+$\tau = T-t$ et $U(\tau,x) = u(T-\tau,x)$. La PDE devient
+\begin{equation}
+  \partial_\tau U
+  = \tfrac12 \sigma^2 \partial_{xx}U
+  + \bigl(r-d - \tfrac12 \sigma^2\bigr)\partial_x U
+  - r U,
+\end{equation}
+avec condition initiale $U(0,x) = f(e^x)$.
+
+\section{Schéma de Crank--Nicolson}
+
+On introduit une grille régulière en espace
+\[
+  x_i = -x_{\max} + i\Delta x,\qquad i=0,\dots,N,
+\]
+et en temps
+\[
+  \tau_n = n \Delta \tau,\qquad n=0,\dots,J,\quad \Delta\tau = T/J.
+\]
+On note $U_i^n \approx U(\tau_n, x_i)$.
+
+On applique un schéma de Crank--Nicolson pour l'opérateur différentiel
+\[
+  \mathcal{L}U
+  = \tfrac12 \sigma^2 \partial_{xx}U
+    + \mu_X \partial_x U
+    - r U,
+  \qquad \mu_X = r-d-\tfrac12\sigma^2.
+\]
+La forme semi--discrète est
+\begin{equation}
+  \frac{U_i^{n+1} - U_i^n}{\Delta \tau}
+  = \tfrac12 \bigl(\mathcal{L}_h U^{n+1}\bigr)_i
+    + \tfrac12 \bigl(\mathcal{L}_h U^n\bigr)_i,
+\end{equation}
+où $\mathcal{L}_h$ est l'approximation en différences finies centrales de
+$\mathcal{L}$ :
+\begin{align}
+  \partial_x U(\tau_n,x_i)
+  &\approx \frac{U_{i+1}^n - U_{i-1}^n}{2\Delta x},\\
+  \partial_{xx} U(\tau_n,x_i)
+  &\approx \frac{U_{i+1}^n - 2U_i^n + U_{i-1}^n}{\Delta x^2}.
+\end{align}
+
+En réorganisant les termes, on obtient pour chaque pas de temps
+un système linéaire tridiagonal de la forme
+\begin{equation}
+  A\,U^{n+1} = B\,U^n,
+\end{equation}
+où $A$ et $B$ sont des matrices tridiagonales construites à partir de
+coefficients du type
+\begin{align}
+  a_i &= -\tfrac14 \Delta\tau \Bigl(\sigma^2 \frac{1}{\Delta x^2}
+            - \mu_X \frac{1}{\Delta x}\Bigr),\\
+  b_i &= 1 + \tfrac12 \Delta\tau
+            \Bigl(\sigma^2 \frac{1}{\Delta x^2} + r\Bigr),\\
+  c_i &= -\tfrac14 \Delta\tau \Bigl(\sigma^2 \frac{1}{\Delta x^2}
+            + \mu_X \frac{1}{\Delta x}\Bigr),
+\end{align}
+pour $A$, et des coefficients de signe opposé pour $B$.
+
+Dans le code, ces coefficients sont représentés par les vecteurs
+$(a,b,c)$, puis assemblés en matrices denses $A$ et $B$; on calcule ensuite
+à chaque pas de temps
+\begin{equation}
+  U^{n+1} = A^{-1}B\,U^n.
+\end{equation}
+
+\section{Conditions aux limites et payoff}
+
+\subsection{Payoff terminal}
+
+Pour un call européen de strike $K$,
+\begin{equation}
+  f(S) = (S-K)^+ = \max(S-K,0),
+\end{equation}
+et pour un put,
+\begin{equation}
+  f(S) = (K-S)^+.
+\end{equation}
+Sur la grille en $x$, on initialise
+\begin{equation}
+  U_i^0 = f(e^{x_i}),\qquad i=0,\dots,N.
+\end{equation}
+
+\subsection{Conditions aux limites en espace}
+
+Pour un call, lorsque $S\to 0$ (soit $x\to -\infty$), la valeur de
+l'option tend vers $0$, d'où
+\begin{equation}
+  U(\tau, x_0) \approx 0.
+\end{equation}
+Lorsque $S\to +\infty$ ($x\to +\infty$), un call se comporte comme $S$, donc
+une condition de type
+\begin{equation}
+  U(\tau, x_N) \approx e^{x_N} - K e^{-r\tau}
+\end{equation}
+est utilisée.
+
+Pour un put, les conditions sont inversées : pour $S\to 0$,
+$U \approx K e^{-r\tau}$, et pour $S\to +\infty$, $U\to 0$.
+Ces conditions sont implémentées à chaque pas de temps dans le code.
+
+\section{Options américaines et bermudéennes}
+
+Pour une option américaine, l'exercice est possible en tout temps $t\in[0,T]$.
+Dans un cadre discret, on autorise l'exercice à chaque date de grille
+$t_n$. L'opérateur de prix devient alors l'enveloppe de Snell du payoff :
+\begin{equation}
+  V(t,S) = \sup_{\tau \in \mathcal{T}_{t,T}}
+  \mathbb{E}^{\mathbb{Q}}\bigl[e^{-r(\tau-t)} f(S_\tau)\,\big|\, S_t=S\bigr],
+\end{equation}
+où $\mathcal{T}_{t,T}$ est l'ensemble des temps d'arrêt à valeurs dans
+$[t,T]$.
+
+Numériquement, cela se traduit par une \emph{projection} à chaque pas de temps
+après la résolution par Crank--Nicolson :
+\begin{equation}
+  U_i^{n} \leftarrow \max\bigl(U_i^{n}, f(e^{x_i})\bigr),
+\end{equation}
+pour tout $i$. Cette opération impose la contrainte d'exercice anticipé.
+
+Pour une option bermudéenne, l'exercice n'est autorisé que sur un
+sous--ensemble discret de dates
+\[
+  0 < t_{n_1} < t_{n_2} < \dots < t_{n_k} = T.
+\]
+Le schéma est identique, mais la projection
+\begin{equation}
+  U_i^{n} \leftarrow \max\bigl(U_i^{n}, f(e^{x_i})\bigr)
+\end{equation}
+n'est appliquée que lorsque $n$ correspond à l'une de ces dates
+d'exercice. Dans le code, ceci se traduit par l'utilisation d'un
+\emph{exercise\_step} (par exemple tous les 10 pas de temps).
+
+\section{Options barrières avec Crank--Nicolson}
+
+On considère des options \emph{knock--out} dont le payoff est annulé si le
+sous--jacent franchit certaines barrières.
+
+\subsection{Up--and--out (UNO)}
+
+On fixe une barrière haute $H_u > 0$. L'option est annulée dès que
+$S_t \ge H_u$ pour un $t\in[0,T]$. Le payoff terminal devient
+\begin{equation}
+  f_{\text{UNO}}(S_T) = f(S_T)\,\mathbf{1}_{\{\max_{0\le u\le T} S_u < H_u\}}.
+\end{equation}
+
+Dans le schéma par Crank--Nicolson en log--prix, on impose cette
+condition en annulant systématiquement les valeurs de la solution sur
+les noeuds tels que $S = e^{x_i} \ge H_u$ :
+\begin{equation}
+  U_i^n \leftarrow 0
+  \quad\text{dès que}\quad e^{x_i} \ge H_u.
+\end{equation}
+Cela vaut à la fois à maturité (condition terminale) et à chaque pas
+de temps en revenant en arrière.
+
+\subsection{Double knock--out (DNO)}
+
+On fixe deux barrières $H_d < H_u$. L'option est annulée dès que
+$S_t \le H_d$ ou $S_t \ge H_u$. Le payoff terminal est
+\begin{equation}
+  f_{\text{DNO}}(S_T)
+  = f(S_T)\,\mathbf{1}_{\{H_d < S_u < H_u,\ \forall u\in[0,T]\}}.
+\end{equation}
+
+Sur la grille en log--prix, cela se traduit par l'annulation des
+valeurs en dehors de la bande
+$H_d < e^{x_i} < H_u$ :
+\begin{equation}
+  U_i^n \leftarrow 0
+  \quad\text{si}\quad e^{x_i} \le H_d
+  \ \text{ou}\ e^{x_i} \ge H_u.
+\end{equation}
+
+\subsection{Extraction du prix et des grecs}
+
+Le code représente la solution discrète par un vecteur $U^0$ à
+la date initiale. Le prix pour $S_0$ correspond au noeud $x_{i^\star}$
+tel que $e^{x_{i^\star}} \approx S_0$ (en pratique l'indice central).
+On pose donc
+\begin{equation}
+  \text{Price} \approx U_{i^\star}^0.
+\end{equation}
+
+Les sensibilités (\emph{grecs}) sont ensuite approchées par
+différences finies autour de $S_0$:
+\begin{align}
+  \Delta
+  &\approx \frac{U_{i^\star+1}^0 - U_{i^\star-1}^0}{S_0 e^{\Delta x} - S_0 e^{-\Delta x}},\\
+  \Gamma
+  &\approx \frac{
+      \frac{U_{i^\star+1}^0 - U_{i^\star}^0}{S_0 e^{\Delta x} - S_0}
+      -
+      \frac{U_{i^\star}^0 - U_{i^\star-1}^0}{S_0 - S_0 e^{-\Delta x}}
+    }{
+      \tfrac12\bigl(S_0 e^{\Delta x} - S_0 e^{-\Delta x}\bigr)
+    },\\
+  \Theta
+  &\approx -\frac{U_{i^\star}^0 - U_{i^\star}^{1}}{\Delta t},
+\end{align}
+où $U^{1}$ est la valeur au pas de temps suivant dans le sens
+de la discrétisation.
+
+\end{document}
+

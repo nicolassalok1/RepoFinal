@@ -1,0 +1,260 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[french]{babel}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{bm}
+\usepackage{geometry}
+\geometry{margin=2.5cm}
+
+\title{Mathématiques des pricers Lookback, Barrière et Européenne}
+\author{}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\section{Modèle sous--jacent}
+
+On suppose que le sous--jacent $S_t$ suit sous la mesure risque--neutre
+une dynamique de type Black--Scholes avec taux sans risque $r$ et
+volatilité constante $\sigma$ :
+\begin{equation}
+  dS_t = r S_t\,dt + \sigma S_t\,dW_t,
+\end{equation}
+où $W_t$ est un mouvement brownien standard.
+
+On note
+\begin{equation}
+  M_t = \max_{0\le u\le t} S_u
+\end{equation}
+le maximum historique du sous--jacent jusqu'au temps $t$.
+
+\section{Option européenne vanille}
+
+La classe \texttt{european\_call\_option} implémente une option call
+européenne classique de payoff
+\begin{equation}
+  f(S_T) = (S_T - K)^+.
+\end{equation}
+
+\subsection{Formule fermée de Black--Scholes}
+
+Le prix à la date $t$ est
+\begin{equation}
+  C(t,S_t)
+  = S_t N\bigl(d_1\bigr)
+    - K e^{-r(T-t)} N\bigl(d_2\bigr),
+\end{equation}
+où
+\begin{align}
+  d_1 &= \frac{\ln(S_t/K) + (r + \frac12\sigma^2)(T-t)}{\sigma\sqrt{T-t}},\\
+  d_2 &= d_1 - \sigma\sqrt{T-t},
+\end{align}
+et $N$ désigne la fonction de répartition de la loi normale standard.
+
+La méthode \texttt{price\_exact} du code applique directement cette formule.
+
+\subsection{PDE de Black--Scholes et schéma CN}
+
+La même classe propose une résolution numérique par équation aux dérivées
+partielles (EDP) avec un schéma de Crank--Nicolson sur une grille en log--prix
+et en temps transformé. On introduit les variables
+\begin{equation}
+  x = \ln\frac{S}{K},\qquad
+  \tau = \frac{\sigma^2}{2}(T-t),
+\end{equation}
+et la fonction réduite $u(\tau,x)$ telle que
+\begin{equation}
+  C(t,S) = K\,u\bigl(\tau, x\bigr).
+\end{equation}
+On montre alors que $u$ satisfait l'EDP
+\begin{equation}
+  \partial_\tau u = \partial_{xx} u + (1 + D)\,\partial_x u,
+  \qquad D = \frac{2r}{\sigma^2},
+\end{equation}
+avec condition initiale (en $\tau=0$)
+\begin{equation}
+  u(0,x) = \max\bigl(0,1-e^{-x}\bigr),
+\end{equation}
+et des conditions aux frontières correspondantes aux comportements
+asymptotiques du call.
+
+Le code construit une grille uniforme en $\tau$ et en $x$, puis applique
+un schéma en différences finies implicite de type Crank--Nicolson.
+À chaque pas de temps, le système linéaire tridiagonal est résolu via
+un algorithme spécialisé (\texttt{const\_tri\_diag\_mat\_solve}).
+
+\section{Option barrière up--and--out}
+
+La classe \texttt{barrier\_call\_option} traite un call up--and--out
+de barrière $B > K$, dont le payoff est
+\begin{equation}
+  f(S_T) = (S_T-K)^+\,\mathbf{1}_{\{\max_{0\le u\le T} S_u < B\}}.
+\end{equation}
+
+\subsection{Formule fermée}
+
+La distribution jointe de $(S_T, \max_{u\le T} S_u)$ sous Black--Scholes
+se dérive grâce au principe de réflexion appliqué au mouvement brownien
+en log--prix. On peut alors exprimer le prix de l'option barrière comme
+une combinaison de fonctions de répartition normales.
+
+On introduit les fonctions auxiliaires (voir \texttt{aux\_functions.py}) :
+\begin{align}
+  \delta_p(\tau, z, r, \sigma)
+    &= \frac{\ln z + (r + \frac12\sigma^2)\tau}{\sigma\sqrt{\tau}},\\
+  \delta_m(\tau, z, r, \sigma)
+    &= \frac{\ln z + (r - \frac12\sigma^2)\tau}{\sigma\sqrt{\tau}}.
+\end{align}
+
+La fonction \texttt{price\_exact} du code implémente une formule analytique
+du type
+\begin{align}
+  V_{\text{UO}}(t,S_0)
+  &= S_0\bigl[
+      N(\delta_p(\tau, S_0/K))
+      - N(\delta_p(\tau, S_0/B))
+    \bigr]
+  - K e^{-r\tau}
+    \bigl[
+      N(\delta_m(\tau, S_0/K))
+      - N(\delta_m(\tau, S_0/B))
+    \bigr]
+  \nonumber\\
+  &\quad
+  - B\Bigl(\frac{S_0}{B}\Bigr)^{-\frac{2r}{\sigma^2}}
+    \bigl[
+      N(\delta_p(\tau, B^2/(K S_0)))
+      - N(\delta_p(\tau, B/S_0))
+    \bigr]
+  \nonumber\\
+  &\quad
+  + K e^{-r\tau}
+    \Bigl(\frac{S_0}{B}\Bigr)^{-\frac{2r}{\sigma^2}+1}
+    \bigl[
+      N(\delta_m(\tau, B^2/(K S_0)))
+      - N(\delta_m(\tau, B/S_0))
+    \bigr],
+\end{align}
+avec $\tau = T-t$. Cette expression résulte d'une combinaison de la
+formule de Black--Scholes standard et de termes \og image \fg{} associés
+à la probabilité de franchissement de la barrière.
+
+\subsection{EDP et schéma numérique}
+
+La même classe propose une approximation par EDP pour le prix du call
+barrière, en travaillant dans la variable réduite
+$x = \ln(S/K)$ sur l'intervalle $S \in [K/3,B]$.
+La fonction $u(\tau,x)$ satisfait à la même EDP que la call européenne
+vanille :
+\begin{equation}
+  \partial_\tau u = \partial_{xx} u + (1 + D)\,\partial_x u,
+  \qquad D = \frac{2r}{\sigma^2},
+\end{equation}
+mais avec la condition de Dirichlet $u(\tau,x_B)=0$ correspondant à
+$S=B$ (barrière).
+
+Le schéma de Crank--Nicolson est appliqué sur la grille en $x$, et l'équation
+linéaire tridiagonale résultante est résolue à chaque pas de temps via
+la routine \texttt{const\_tri\_diag\_mat\_solve}, comme pour le call
+européen.
+
+\section{Option lookback à strike flottant}
+
+La classe \texttt{lookback\_call\_option} traite un call de type lookback
+à strike flottant, dont le payoff à maturité est
+\begin{equation}
+  f(S_T, M_T) = M_T - S_T.
+\end{equation}
+Cette option permet de \og regarder en arrière \fg{} sur tout l'historique
+de $S_t$ pour fixer le strike au meilleur prix observé.
+
+\subsection{Formule fermée}
+
+On introduit la variable réduite
+\begin{equation}
+  Z_T = \frac{S_T}{M_T} \in (0,1],
+\end{equation}
+et on travaille avec $z = Z_T$ comme variable d'état.
+Sous Black--Scholes, la distribution de $Z_T$ (ou, plus précisément, la
+distribution jointe de $(S_T,M_T)$) peut être obtenue via le principe de
+réflexion pour un brownien arithmétique dérivé de $\ln S_t$.
+
+La méthode \texttt{price\_exact} utilise une expression analytique de la
+forme
+\begin{equation}
+  V(t,S_0)
+  = S_0\,v(z),\qquad z = \frac{S_T}{M_T},
+\end{equation}
+où, pour $\tau = T-t$,
+\begin{align}
+  p &= \frac{\sigma^2}{2r},\\
+  v(z)
+  &= (1+p) z\,N\bigl(\delta_p(\tau,z)\bigr)
+   + e^{-r\tau} N\bigl(-\delta_m(\tau,z)\bigr)
+   - p e^{-r\tau} z^{1-p} N\bigl(-\delta_m(\tau,1/z)\bigr)
+   - z.
+\end{align}
+Au temps initial $t=0$, on a typiquement $z=1$ (puisque $M_0=S_0$),
+ce qui donne le prix initial.
+
+Cette formule est cohérente avec les expressions classiques de la littérature
+pour les lookbacks à strike flottant.
+
+\subsection{EDP pour la lookback}
+
+La classe propose également une résolution par EDP dans des variables
+réduites. On introduit des variables $(\tau,x)$ adaptées à la symétrie
+de l'équation (voir \texttt{lookback\_call.py}), conduisant à une EDP
+de la forme
+\begin{equation}
+  \partial_\tau u = \partial_{xx}u + (1 + D)\,\partial_x u,
+  \qquad D = \frac{2r}{\sigma^2},
+\end{equation}
+sur un domaine approprié en $x$.
+
+Les conditions aux frontières sont plus délicates que pour un call
+vanille et reflètent le fait qu'on travaille sur le ratio $S/M$.
+Numériquement, le code :
+\begin{itemize}
+  \item impose une condition de type Dirichlet sur un bord,
+  \item impose une condition de Neumann (dérivée) sur l'autre bord,
+  \item résout à chaque pas de temps un système tridiagonal par
+    \texttt{tri\_diag\_mat\_solve\_arr}.
+\end{itemize}
+Après la résolution, on revient aux variables originales $(S,t)$.
+Le prix au temps initial s'obtient en interpolant la solution de la grille
+au point $z=1$ et en remultipliant par $S_0$ (méthode \texttt{get\_pde\_result}).
+
+\subsection{Méthode de Monte Carlo}
+
+La méthode \texttt{price\_monte\_carlo} simule directement des trajectoires
+de $S_t$ et de son maximum, via la représentation
+\begin{equation}
+  S_t = S_0 \exp\Bigl( (r - \tfrac12\sigma^2)t + \sigma W_t\Bigr).
+\end{equation}
+On génère un brownien conditionnellement à une valeur terminale donnée
+et on utilise la loi du maximum conditionnel d'un brownien.
+Le payoff $M_T - S_T$ est alors évalué sur chaque trajectoire, puis
+actualisé (par $e^{-rT}$) et moyenné.
+
+\section{Interpolation sur la grille}
+
+Pour les schémas EDP, le prix au point $(S_0,t_0)$ est rarement situé
+exactement sur un noeud de la grille spatiale. La fonction utilitaire
+\texttt{get\_result} effectue une interpolation linéaire :
+si $x_{\ell} < S_0 < x_r$ sont les deux noeuds encadrant $S_0$, et
+$(v_\ell,v_r)$ les valeurs de la solution en ces points, alors
+\begin{equation}
+  V(S_0,t)
+  \approx v_\ell + (v_r - v_\ell)
+    \frac{S_0 - x_\ell}{x_r - x_\ell}.
+\end{equation}
+
+Cette étape est utilisée par toutes les méthodes \texttt{get\_pde\_result}
+pour renvoyer un prix continu à partir d'une solution sur grille.
+
+\end{document}
+

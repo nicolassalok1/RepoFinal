@@ -1,0 +1,248 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[french]{babel}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{bm}
+\usepackage{geometry}
+\geometry{margin=2.5cm}
+
+\title{Mathématiques des pricers Monte Carlo, Longstaff--Schwartz, Black--Scholes et CRR}
+\author{}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\section{Cadre général de valorisation}
+
+On considère un actif risqué $S_t$ sous la mesure risque--neutre $\mathbb{Q}$,
+défini sur $(\Omega,\mathcal{F},\mathbb{Q})$, et un taux sans risque constant $r$.
+Le prix d'une option européenne de payoff $f(S_T)$ à la maturité $T$ est donné par
+\begin{equation}
+  V_0 = \mathbb{E}^{\mathbb{Q}}\bigl[e^{-rT} f(S_T)\bigr].
+\end{equation}
+
+Dans la bibliothèque \texttt{Longstaff}, le sous--jacent peut suivre :
+\begin{itemize}
+  \item un mouvement brownien géométrique (GBM) : 
+    \[
+      dS_t = \mu S_t\,dt + \sigma S_t\,dW_t,
+    \]
+  \item un modèle de Heston :
+    \[
+      \begin{cases}
+        dS_t = \mu S_t\,dt + \sqrt{v_t}\,S_t\,dW_t^S,\\[0.2em]
+        dv_t = \kappa(\theta - v_t)\,dt + \eta \sqrt{v_t}\,dW_t^v,
+      \end{cases}
+    \]
+    avec $\mathrm{corr}(dW_t^S,dW_t^v) = \rho$.
+\end{itemize}
+Dans un cadre rigoureux, la dérive $\mu$ doit coïncider avec $r$ sous $\mathbb{Q}$,
+mais l'implémentation laisse la liberté de paramétrer $\mu$.
+
+\section{Monte Carlo classique}
+
+\subsection{Estimateur de prix}
+
+On simule $n$ trajectoires indépendantes du processus $(S_t)_{0\le t\le T}$,
+discrétisées sur une grille $0 = t_0 < t_1 < \dots < t_m = T$.
+Pour une option de payoff $f(S_T)$, l'estimateur Monte Carlo du prix est
+\begin{equation}
+  \hat{V}_n
+  = e^{-rT}\,\frac{1}{n}\sum_{k=1}^n f\bigl(S_T^{(k)}\bigr).
+\end{equation}
+
+Dans le code (\texttt{monte\_carlo\_simulation}), on note
+la dérive par \texttt{process.mu}; l'actualisation est effectuée via
+$\exp(-\mu T)$, ce qui repose sur l'approximation $\mu \approx r$.
+
+\subsection{Erreur statistique et intervalle de confiance}
+
+Soient les variables aléatoires
+\begin{equation}
+  X_k = e^{-rT} f\bigl(S_T^{(k)}\bigr),\qquad k=1,\dots,n,
+\end{equation}
+supposées i.i.d. de variance finie $\sigma_X^2$.
+On a
+\begin{equation}
+  \hat{V}_n = \frac{1}{n}\sum_{k=1}^n X_k
+  \xrightarrow[n\to\infty]{a.s.} V_0.
+\end{equation}
+
+Le théorème central limite donne
+\begin{equation}
+  \sqrt{n}\,\frac{\hat{V}_n - V_0}{\hat{\sigma}_X}
+  \xrightarrow[n\to\infty]{\mathcal{L}} \mathcal{N}(0,1),
+\end{equation}
+où $\hat{\sigma}_X$ est l'estimateur empirique de l'écart--type.
+Un intervalle de confiance asymptotique à niveau $1-\alpha$ est donc
+\begin{equation}
+  \hat{V}_n \pm z_{1-\alpha/2}\,\frac{\hat{\sigma}_X}{\sqrt{n}},
+\end{equation}
+où $z_{1-\alpha/2}$ est le quantile de la loi normale standard. C'est
+exactement la formule utilisée dans le code.
+
+\section{Algorithme de Longstaff--Schwartz}
+
+Pour valoriser une option américaine (ou plus généralement une option
+à exercice bermudéen) avec payoff discret $f_j(S_{t_j})$ aux dates
+$0=t_0<t_1<\dots<t_m=T$, on cherche la valeur
+\begin{equation}
+  V_0
+  = \sup_{\tau\in \mathcal{T}}\,
+    \mathbb{E}^{\mathbb{Q}}\Bigl[
+      e^{-r\tau} f_\tau(S_\tau)
+    \Bigr],
+\end{equation}
+où $\mathcal{T}$ est l'ensemble des temps d'arrêt à valeurs dans
+$\{t_0,\dots,t_m\}$.
+
+L'idée de Longstaff--Schwartz (2001) est d'approximer, par régression,
+les valeurs de continuation conditionnelles
+\begin{equation}
+  C_j(s)
+  = \mathbb{E}^{\mathbb{Q}}\Bigl[
+      e^{-r\Delta t} V_{j+1}(S_{t_{j+1}})
+      \,\big|\, S_{t_j}=s
+    \Bigr],
+\end{equation}
+où $\Delta t = t_{j+1}-t_j$.
+
+\subsection{Algorithme}
+
+On note $S_{t_j}^{(k)}$ la valeur du sous--jacent sur la $k$-ième
+trajectoire au temps $t_j$ ($k=1,\dots,n$). L'algorithme s'écrit :
+\begin{enumerate}
+  \item Simuler $n$ trajectoires complètes $S_{t_0}^{(k)},\dots,S_{t_m}^{(k)}$.
+  \item Initialiser à maturité
+    \[
+      V_m^{(k)} = f_m\bigl(S_{t_m}^{(k)}\bigr),\qquad k=1,\dots,n.
+    \]
+  \item Pour $j=m-1,\dots,1$ (remontée en temps) :
+    \begin{enumerate}
+      \item Identifier les trajectoires \emph{dans la monnaie} à $t_j$ :
+        \[
+          \mathcal{I}_j
+          = \bigl\{k:\ f_j(S_{t_j}^{(k)}) > 0\bigr\}.
+        \]
+      \item Pour ces trajectoires, calculer les cash--flows actualisés
+        \[
+          Y^{(k)} = e^{-r\Delta t}\,V_{j+1}^{(k)}.
+        \]
+      \item Approximer $C_j(s)$ par une régression linéaire
+        sur une base de fonctions $\{\phi_\ell\}_{\ell=0}^p$ (polynômes) :
+        \[
+          Y^{(k)} \approx \sum_{\ell=0}^p \beta_{j,\ell}\,\phi_\ell\bigl(S_{t_j}^{(k)}\bigr),
+          \qquad k\in\mathcal{I}_j.
+        \]
+        Le vecteur de coefficients $\bm{\beta}_j$ est obtenu par moindres
+        carrés ordinaires.
+      \item Pour chaque trajectoire $k$, on évalue la continuation estimée
+        \[
+          \hat{C}_j^{(k)}
+          = \sum_{\ell=0}^p \beta_{j,\ell}\,\phi_\ell\bigl(S_{t_j}^{(k)}\bigr).
+        \]
+      \item Décision d'exercice :
+        \[
+          V_j^{(k)}
+          =
+          \begin{cases}
+            f_j\bigl(S_{t_j}^{(k)}\bigr),
+              &\text{si } f_j(S_{t_j}^{(k)}) \ge \hat{C}_j^{(k)},\\[0.3em]
+            e^{-r\Delta t}\,V_{j+1}^{(k)},
+              &\text{sinon.}
+          \end{cases}
+        \]
+    \end{enumerate}
+  \item Le prix de l'option est enfin donné par
+    \[
+      \hat{V}_0
+      = \frac{1}{n}\sum_{k=1}^n e^{-r t_{j^\star(k)}}\,
+        f_{j^\star(k)}\bigl(S_{t_{j^\star(k)}}^{(k)}\bigr),
+    \]
+    où $t_{j^\star(k)}$ est la date d'exercice optimale sur la trajectoire $k$.
+\end{enumerate}
+
+Dans le code, l'approximation de $C_j$ utilise \texttt{numpy.polynomial.Polynomial.fit}
+sur des puissances de $S_{t_j}$ jusqu'à un degré $5$.
+
+\section{Formule de Black--Scholes--Merton}
+
+Sous le modèle de Black--Scholes, avec $S_t$ suivant
+\begin{equation}
+  dS_t = r S_t\,dt + \sigma S_t\,dW_t,
+\end{equation}
+le prix d'un call européen de strike $K$ et de maturité $T$ est
+\begin{equation}
+  C_{\mathrm{BS}}(S_0,K,T)
+  = S_0 N(d_1) - K e^{-rT}N(d_2),
+\end{equation}
+où
+\begin{align}
+  d_1 &= \frac{\ln(S_0/K) + (r + \frac12\sigma^2)T}{\sigma\sqrt{T}},\\
+  d_2 &= d_1 - \sigma\sqrt{T},
+\end{align}
+et $N$ est la fonction de répartition de la loi normale standard.
+
+Le prix du put correspondant se déduit de la parité put--call :
+\begin{equation}
+  P_{\mathrm{BS}}(S_0,K,T)
+  = C_{\mathrm{BS}}(S_0,K,T) - S_0 + K e^{-rT}.
+\end{equation}
+
+La fonction \texttt{black\_scholes\_merton} du code implémente directement
+ces formules, en retournant le prix du call ou du put selon le paramètre
+booléen \texttt{option.call}.
+
+\section{Modèle binomial de Cox--Ross--Rubinstein (CRR)}
+
+Le modèle CRR approxime le mouvement brownien géométrique par un arbre
+binomial à $n$ pas sur l'intervalle $[0,T]$. On pose
+\begin{align}
+  \Delta t &= \frac{T}{n},\\
+  u &= e^{\sigma \sqrt{\Delta t}},\\
+  d &= \frac{1}{u}.
+\end{align}
+La valeur du sous--jacent au pas $j$ et dans l'état $i$ est
+\begin{equation}
+  S_{j,i} = S_0\,u^i d^{j-i},\qquad 0\le i\le j.
+\end{equation}
+
+Sous la mesure risque--neutre, la probabilité d'un mouvement \og up \fg{}
+est
+\begin{equation}
+  p = \frac{e^{r\Delta t} - d}{u-d},
+\end{equation}
+et $q = 1-p$ est la probabilité d'un mouvement \og down \fg{}.
+
+\subsection{Valorisation d'une option américaine}
+
+On initialise les payoffs à maturité, par exemple pour un put américain
+\begin{equation}
+  V_n^i = \bigl(K - S_{n,i}\bigr)^+,\qquad i=0,\dots,n.
+\end{equation}
+Ensuite, on remonte dans l'arbre par récurrence :
+\begin{equation}
+  V_j^i
+  = \max\Bigl(
+      \bigl(K - S_{j,i}\bigr)^+,
+      e^{-r\Delta t}\,\bigl(p V_{j+1}^{i+1} + q V_{j+1}^i\bigr)
+    \Bigr),
+  \qquad j = n-1,\dots,0.
+\end{equation}
+La première composante représente le payoff d'exercice immédiat, la seconde
+la continuation espérée sous $\mathbb{Q}$.
+
+Le prix de l'option à la date $0$ est alors
+\begin{equation}
+  V_0^0.
+\end{equation}
+
+La fonction \texttt{crr\_pricing} du code suit exactement ce schéma :
+construction des $S_{n,i}$ à maturité, calcul des payoffs, puis remontée
+avec la règle de mise à jour ci--dessus.
+
+\end{document}
+
